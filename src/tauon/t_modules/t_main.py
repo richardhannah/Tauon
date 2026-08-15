@@ -33631,26 +33631,35 @@ class BottomBarType1:
 		compact = self.window_size[0] < 650 * scale
 		playing = self.pctl.playing_state == PlayingState.PLAYING
 
-		row = ControlRow(
-			spacing=36 * scale,
-			hit_y=self.window_size[1] - self.control_line_bottom - (7 * scale),
-			hit_h=27 * scale)
-
-		# In compact mode the row carries one of play/pause rather than both
-		if not compact or not playing:
-			row.add("play", self.play_button.w)
-		if not compact or playing:
-			row.add("pause", 14 * scale)  # two 4-wide bars, 10 apart
-		row.add("back", self.back_button.w)
-		row.add("forward", self.forward_button.w)
+		def make(with_modes: bool) -> ControlRow:
+			row = ControlRow(
+				spacing=36 * scale,
+				hit_y=self.window_size[1] - self.control_line_bottom - (7 * scale),
+				hit_h=27 * scale)
+			# Shuffle and repeat bracket the transport, as they conventionally do
+			if with_modes:
+				row.add("shuffle", self.shuffle_button.w)
+			# In compact mode the row carries one of play/pause rather than both
+			if not compact or not playing:
+				row.add("play", self.play_button.w)
+			if not compact or playing:
+				row.add("pause", 14 * scale)  # two 4-wide bars, 10 apart
+			row.add("back", self.back_button.w)
+			row.add("forward", self.forward_button.w)
+			if with_modes:
+				row.add("repeat", self.repeat_button.w)
+			return row
 
 		# Only centre while there is room: the right-hand controls start at W - 380,
 		# so a centred cluster needs its own width plus roughly twice that clearance.
-		# Below that it would sit on top of them, so fall back to the left.
+		row = make(with_modes=self.mode == 0)
 		centred = self.window_size[0] > row.width + (800 * scale)
 		if centred:
 			row.place_centred(self.window_size[0] / 2)
 		else:
+			# Left-aligned there is no room for the mode buttons either - the full
+			# row would reach the menu button - so drop them and re-measure.
+			row = make(with_modes=False)
 			row.place(29 * scale)
 		return row, centred
 
@@ -34237,6 +34246,49 @@ class BottomBarType1:
 				if tauon.stream_proxy.encode_running:
 					play_colour = ColourRGBA(220, 50, 50, 255)
 
+			# SHUFFLE---
+			if transport.has("shuffle"):
+				sx = transport.x("shuffle")
+				rect = transport.hit("shuffle", hit_pad)
+				self.fields.add(rect)
+
+				rpbc = md_off
+				off = True
+				if (inp.mouse_click or inp.right_click) and self.coll(rect):
+					if inp.mouse_click:
+						tauon.toggle_random()
+						if pctl.random_mode is False:
+							self.random_click_off = True
+					else:
+						tauon.shuffle_menu.activate(position=(sx + 30 * gui.scale, y - 7 * gui.scale))
+
+				if pctl.random_mode:
+					rpbc = md_active
+					off = False
+					if self.coll(rect):
+						tauon.tool_tip.test(sx, y - 28 * gui.scale, _("Shuffle"))
+				elif self.coll(rect):
+					tauon.tool_tip.test(sx, y - 28 * gui.scale, _("Shuffle"))
+					if self.random_click_off is True:
+						rpbc = md_off
+					elif pctl.random_mode is True:
+						rpbc = md_active
+					else:
+						rpbc = md_over
+				else:
+					self.random_click_off = False
+
+				# Keep hover highlight on if menu is open
+				if tauon.shuffle_menu.active and not pctl.random_mode:
+					rpbc = md_over
+
+				if pctl.album_shuffle_mode:
+					self.shuffle_button_a.render(sx, y, rpbc)
+				elif off:
+					self.shuffle_button_off.render(sx, y, rpbc)
+				else:
+					self.shuffle_button.render(sx, y, rpbc)
+
 			# PLAY---
 			if transport.has("play"):
 				rect = transport.hit("play", hit_pad)
@@ -34334,6 +34386,55 @@ class BottomBarType1:
 
 			self.back_button.render(transport.x("back"), 1 + y, back_colour)
 
+			# REPEAT---
+			if transport.has("repeat"):
+				rx = transport.x("repeat")
+				rect = transport.hit("repeat", hit_pad)
+				self.fields.add(rect)
+
+				rpbc = md_off
+				off = True
+				if (inp.mouse_click or inp.right_click) and self.coll(rect):
+					if inp.mouse_click:
+						tauon.toggle_repeat()
+						if pctl.repeat_mode is False:
+							self.repeat_click_off = True
+					else:  # right click
+						tauon.repeat_menu.activate(position=(rx + 30 * gui.scale, y - 7 * gui.scale))
+
+				repeat_tip = _("Repeat album") if pctl.album_repeat_mode else _("Repeat track")
+				if pctl.repeat_mode:
+					rpbc = md_active
+					off = False
+					if self.coll(rect):
+						tauon.tool_tip.test(rx, y - 28 * gui.scale, repeat_tip)
+				elif self.coll(rect):
+					# Tooltips. But don't show tooltips if menus open
+					if not tauon.repeat_menu.active and not tauon.shuffle_menu.active:
+						tauon.tool_tip.test(rx, y - 28 * gui.scale, repeat_tip)
+
+					if self.repeat_click_off is True:
+						rpbc = md_off
+					elif pctl.repeat_mode is True:
+						rpbc = md_active
+					else:
+						rpbc = md_over
+				else:
+					self.repeat_click_off = False
+
+				# Keep hover highlight on if menu is open
+				if tauon.repeat_menu.active and not pctl.repeat_mode:
+					rpbc = md_over
+
+				rpbc = alpha_blend(rpbc, colours.bottom_panel_colour)  # bake in alpha in case of overlap
+
+				if pctl.album_repeat_mode:
+					self.repeat_button_a.render(rx, y, rpbc)
+				elif off:
+					self.repeat_button_off.render(rx, y, rpbc)
+				else:
+					self.repeat_button.render(rx, y, rpbc)
+
 			# menu button
 
 			x = window_size[0] - 252 * gui.scale - right_offset
@@ -34359,140 +34460,6 @@ class BottomBarType1:
 			ddt.rect_a((x, y), (24 * gui.scale, 2 * gui.scale), rpbc)
 			y += spacing
 			ddt.rect_a((x, y), (24 * gui.scale, 2 * gui.scale), rpbc)
-
-			if self.mode == 0 and window_size[0] > 530 * gui.scale:
-
-				# shuffle button
-				x = window_size[0] - 318 * gui.scale - right_offset
-				y = window_size[1] - 37 * gui.scale
-
-				rect = (x - 5 * gui.scale, y - 5 * gui.scale, 60 * gui.scale, 25 * gui.scale)
-				self.fields.add(rect)
-
-				rpbc = md_off
-				off = True
-				if (inp.mouse_click or inp.right_click) and self.coll(rect):
-					if inp.mouse_click:
-						# pctl.random_mode ^= True
-						tauon.toggle_random()
-						if pctl.random_mode is False:
-							self.random_click_off = True
-					else:
-						tauon.shuffle_menu.activate(position=(x + 30 * gui.scale, y - 7 * gui.scale))
-
-				if pctl.random_mode:
-					rpbc = md_active
-					off = False
-					if self.coll(rect):
-						tauon.tool_tip.test(x, y - 28 * gui.scale, _("Shuffle"))
-				elif self.coll(rect):
-					tauon.tool_tip.test(x, y - 28 * gui.scale, _("Shuffle"))
-					if self.random_click_off is True:
-						rpbc = md_off
-					elif pctl.random_mode is True:
-						rpbc = md_active
-					else:
-						rpbc = md_over
-				else:
-					self.random_click_off = False
-
-				# Keep hover highlight on if menu is open
-				if tauon.shuffle_menu.active and not pctl.random_mode:
-					rpbc = md_over
-
-				#self.shuffle_button.render(x + round(1 * gui.scale), y + round(1 * gui.scale), rpbc)
-
-				#y += round(3 * gui.scale)
-				#ddt.rect_a((x, y), (25 * gui.scale, 3 * gui.scale), rpbc)
-
-				icon_x_shift = round(2 * gui.scale)
-				if pctl.album_shuffle_mode:
-					self.shuffle_button_a.render(x + round(1 * gui.scale) + icon_x_shift, y + round(1 * gui.scale), rpbc)
-				elif off:
-					self.shuffle_button_off.render(x + round(1 * gui.scale) + icon_x_shift, y + round(1 * gui.scale), rpbc)
-				else:
-					self.shuffle_button.render(x + round(1 * gui.scale) + icon_x_shift, y + round(1 * gui.scale), rpbc)
-
-					#ddt.rect_a((x + 25 * gui.scale, y), (23 * gui.scale, 3 * gui.scale), rpbc)
-
-				#y += round(5 * gui.scale)
-				#ddt.rect_a((x, y), (48 * gui.scale, 3 * gui.scale), rpbc)
-
-				# REPEAT
-				x = window_size[0] - round(380 * gui.scale) - right_offset
-				y = window_size[1] - round(37 * gui.scale)
-
-				rpbc = md_off
-				off = True
-
-				rect = (x - 6 * gui.scale, y - 5 * gui.scale, 61 * gui.scale, 25 * gui.scale)
-				self.fields.add(rect)
-				if (inp.mouse_click or inp.right_click) and self.coll(rect):
-					if inp.mouse_click:
-						tauon.toggle_repeat()
-						if pctl.repeat_mode is False:
-							self.repeat_click_off = True
-					else:  # right click
-						tauon.repeat_menu.activate(position=(x + 30 * gui.scale, y - 7 * gui.scale))
-						# pctl.album_repeat_mode ^= True
-						# if not pctl.repeat_mode:
-						#     self.repeat_click_off = True
-
-				if pctl.repeat_mode:
-					rpbc = md_active
-					off = False
-					if self.coll(rect):
-						if pctl.album_repeat_mode:
-							tauon.tool_tip.test(x, y - 28 * gui.scale, _("Repeat album"))
-						else:
-							tauon.tool_tip.test(x, y - 28 * gui.scale, _("Repeat track"))
-				elif self.coll(rect):
-
-					# Tooltips. But don't show tooltips if menus open
-					if not tauon.repeat_menu.active and not tauon.shuffle_menu.active:
-						if pctl.album_repeat_mode:
-							tauon.tool_tip.test(x, y - 28 * gui.scale, _("Repeat album"))
-						else:
-							tauon.tool_tip.test(x, y - 28 * gui.scale, _("Repeat track"))
-
-					if self.repeat_click_off is True:
-						rpbc = md_off
-					elif pctl.repeat_mode is True:
-						rpbc = md_active
-					else:
-						rpbc = md_over
-				else:
-					self.repeat_click_off = False
-
-				# Keep hover highlight on if menu is open
-				if tauon.repeat_menu.active and not pctl.repeat_mode:
-					rpbc = md_over
-
-				rpbc = alpha_blend(rpbc, colours.bottom_panel_colour)  # bake in alpha in case of overlap
-
-				y += round(3 * gui.scale)
-				w = round(3 * gui.scale)
-				y = round(y)
-				x = round(x)
-
-				ar = x + round(50 * gui.scale)
-				h = round(5 * gui.scale)
-
-				if pctl.album_repeat_mode:
-					self.repeat_button_a.render(ar - round(45 * gui.scale) + icon_x_shift, y - round(2 * gui.scale), rpbc)
-					#ddt.rect_a((x + round(4 * gui.scale), y), (round(25 * gui.scale), w), rpbc)
-				elif off:
-					self.repeat_button_off.render(ar - round(45 * gui.scale) + icon_x_shift, y - round(2 * gui.scale), rpbc)
-				else:
-					self.repeat_button.render(ar - round(45 * gui.scale) + icon_x_shift, y - round(2 * gui.scale), rpbc)
-				#ddt.rect_a((ar - round(25 * gui.scale), y), (round(25 * gui.scale), w), rpbc)
-				#ddt.rect_a((ar - w, y), (w, h), rpbc)
-				#ddt.rect_a((ar - round(50 * gui.scale), y + h), (round(50 * gui.scale), w), rpbc)
-
-				# ddt.rect_a((x + round(25 * gui.scale), y), (round(25 * gui.scale), w), rpbc, True)
-				# ddt.rect_a((x + round(4 * gui.scale), y + round(5 * gui.scale)), (math.floor(46 * gui.scale), w), rpbc, True)
-				# ddt.rect_a((x + 50 * gui.scale - w, y), (w, 8 * gui.scale), rpbc, True)
-				# ddt.rect_a((x + round(50 * gui.scale) - w, y + w), (w, round(4 * gui.scale)), rpbc, True)
 
 class BottomBarType_ao1:
 	def __init__(self, tauon: Tauon) -> None:
