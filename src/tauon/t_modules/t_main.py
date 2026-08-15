@@ -33593,12 +33593,14 @@ class BottomBarType1:
 		self.seek_hit = False
 		self.volume_hit = False
 		self.volume_bar_being_dragged = False
-		self.control_line_bottom = 35 * self.gui.scale
+		# Raised from 35 to make room for the seek bar on its own row beneath the buttons
+		self.control_line_bottom = 44 * self.gui.scale
 		self.repeat_click_off = False
 		self.random_click_off = False
 
-		self.seek_bar_position = [300 * self.gui.scale, self.window_size[1] - self.gui.panelBY]
-		self.seek_bar_size = [self.window_size[0] - (300 * self.gui.scale), 15 * self.gui.scale]
+		# Real values are set every frame in update(); these are just sane starting points
+		self.seek_bar_position = [180 * self.gui.scale, self.window_size[1] - (17 * self.gui.scale)]
+		self.seek_bar_size = [self.window_size[0] - (360 * self.gui.scale), 7 * self.gui.scale]
 		self.volume_bar_size = [135 * self.gui.scale, 14 * self.gui.scale]
 		self.volume_bar_position = [0, 45 * self.gui.scale]
 
@@ -33619,15 +33621,19 @@ class BottomBarType1:
 	def update(self) -> None:
 		if self.mode == 0:
 			self.volume_bar_position[0] = self.window_size[0] - (210 * self.gui.scale)
-			self.volume_bar_position[1] = self.window_size[1] - (27 * self.gui.scale)
-			self.seek_bar_position[1]   = self.window_size[1] - self.gui.panelBY
+			self.volume_bar_position[1] = self.window_size[1] - (36 * self.gui.scale)
 
-			seek_bar_x = 300 * self.gui.scale
-			if self.window_size[0] < 600 * self.gui.scale:
-				seek_bar_x = 250 * self.gui.scale
+			# The seek bar sits on its own row underneath the centred transport
+			# cluster, inset equally from both edges so it stays centred on the
+			# window. On narrow windows the inset collapses to keep it usable.
+			seek_inset = 180 * self.gui.scale
+			if self.window_size[0] < 900 * self.gui.scale:
+				seek_inset = 40 * self.gui.scale
 
-			self.seek_bar_size[0] = self.window_size[0] - seek_bar_x
-			self.seek_bar_position[0] = seek_bar_x
+			self.seek_bar_position[0] = seek_inset
+			self.seek_bar_size[0] = max(60 * self.gui.scale, self.window_size[0] - (seek_inset * 2))
+			self.seek_bar_position[1] = self.window_size[1] - (17 * self.gui.scale)
+			self.seek_bar_size[1] = 7 * self.gui.scale
 
 			# if gui.bb_show_art:
 			#     self.seek_bar_position[0] = 300 + gui.panelBY
@@ -33653,6 +33659,24 @@ class BottomBarType1:
 			sdl3.SDL_SetRenderDrawBlendMode(self.renderer, sdl3.SDL_BLENDMODE_NONE)
 		ddt.rect_a((0, self.window_size[1] - self.gui.panelBY), (self.window_size[0], self.gui.panelBY), colours.bottom_panel_colour)
 		sdl3.SDL_SetRenderDrawBlendMode(self.renderer, sdl3.SDL_BLENDMODE_BLEND)
+
+		# Transport cluster geometry. The buttons are laid out from a fixed set of
+		# offsets starting at 29 (the play icon); in compact mode play is dropped and
+		# everything shifts left by 46, so the cluster starts at pause instead. Both
+		# cases begin at 29, only the span differs. Centring the whole cluster is then
+		# a single shift, reused below for the title's max width so the two cannot
+		# collide.
+		compact = window_size[0] < 650 * gui.scale
+		cluster_span = (165 if compact else 211) * gui.scale + self.forward_button.w
+		# Only centre while there is actually room. The right-hand controls start at
+		# W - 380 (repeat button), so a centred cluster needs roughly its own width
+		# plus twice that clearance; below it the cluster would sit straight on top of
+		# them, so fall back to the original left-aligned position.
+		if window_size[0] > cluster_span + (800 * gui.scale):
+			buttons_centre_shift = round((window_size[0] - cluster_span) / 2 - (29 * gui.scale))
+		else:
+			buttons_centre_shift = 0
+		cluster_left_x = (29 * gui.scale) + buttons_centre_shift
 
 		# Let the grey furniture inherit a hint of the local art hue/saturation
 		so = tauon.style_overlay
@@ -34015,20 +34039,23 @@ class BottomBarType1:
 		if gui.show_bottom_title and pctl.playing_state != PlayingState.STOPPED and window_size[0] > 820 * gui.scale:
 			line = pctl.title_text()
 
-			x = self.seek_bar_position[0] + 1
-			mx = window_size[0] - 710 * gui.scale
-			# if self.gui.bb_show_art:
-			#  x += 10 * self.gui.scale
-			#  mx -= self.gui.panelBY - 10
+			# The title used to hang off the seek bar's left edge. The seek bar now
+			# lives on its own centred row below, so anchor the title to the left of
+			# the panel instead and cap its width short of the centred cluster.
+			x = 20 * gui.scale
+			mx = max(120 * gui.scale, cluster_left_x - x - (30 * gui.scale))
 
-			# line = self.tauon.trunc_line(line, 213, mx)
 			ddt.text(
-				(x, self.seek_bar_position[1] + 24 * gui.scale), line, colours.bar_title_text,
+				(x, window_size[1] - 36 * gui.scale), line, colours.bar_title_text,
 				fonts.panel_title, max_w=mx)
 
+		# Click target for the title text. Kept in step with the title's new
+		# left-anchored position above, rather than the seek bar it used to follow.
+		title_hit_x = 20 * gui.scale
+		title_hit_w = max(120 * gui.scale, cluster_left_x - title_hit_x - (30 * gui.scale))
 		if (inp.mouse_click or inp.right_click) and self.coll((
-				self.seek_bar_position[0] - 10 * gui.scale, self.seek_bar_position[1] + 20 * gui.scale,
-				window_size[0] - 710 * gui.scale, 30 * gui.scale)):
+				title_hit_x - (10 * gui.scale), window_size[1] - (40 * gui.scale),
+				title_hit_w + (20 * gui.scale), 26 * gui.scale)):
 			# if pctl.playing_state == PlayingState.URL_STREAM:
 			# 	copy_to_clipboard(pctl.tag_meta)
 			# 	self.show_message("Copied text to clipboard")
@@ -34052,7 +34079,9 @@ class BottomBarType1:
 		# TIME----------------------
 
 		x = window_size[0] - 57 * gui.scale
-		y = window_size[1] - 29 * gui.scale
+		# Raised in step with the title and volume bar, so the whole upper row of the
+		# bottom panel sits above the seek bar rather than beside it
+		y = window_size[1] - 38 * gui.scale
 
 		r_start = x - 10 * gui.scale
 		if gui.display_time_mode in (2, 3):
@@ -34152,10 +34181,14 @@ class BottomBarType1:
 
 		if gui.mode == GuiMode.MAIN:
 			# PLAY---
-			buttons_x_offset = 0
-			compact = False
-			if window_size[0] < 650 * gui.scale:
-				compact = True
+			# `compact` and the centring shift are computed once at the top of render()
+			buttons_x_offset = buttons_centre_shift
+
+			# Shared hit band for the transport buttons. Now that the cluster is
+			# centred it sits over the content area and the seek bar, so the band is
+			# clamped to the panel's top edge and stops short of the seek bar row.
+			btn_hit_y = window_size[1] - self.control_line_bottom - (7 * gui.scale)
+			btn_hit_h = 27 * gui.scale
 
 			play_colour = mb_off
 			pause_colour = mb_off
@@ -34179,8 +34212,8 @@ class BottomBarType1:
 
 			if not compact or (compact and pctl.playing_state != PlayingState.PLAYING):
 				rect = (
-				buttons_x_offset + (10 * gui.scale), window_size[1] - self.control_line_bottom - (13 * gui.scale),
-				50 * gui.scale, 40 * gui.scale)
+				buttons_x_offset + (10 * gui.scale), btn_hit_y,
+				50 * gui.scale, btn_hit_h)
 				self.fields.add(rect)
 				if self.coll(rect):
 					play_colour = mb_over
@@ -34192,24 +34225,27 @@ class BottomBarType1:
 						else:
 							pctl.play()
 						inp.mouse_click = False
-					tauon.tool_tip2.test(33 * gui.scale, y - 35 * gui.scale, _("Play, RC: Go to playing"))
+					tauon.tool_tip2.test(buttons_x_offset + 33 * gui.scale, y - 35 * gui.scale, _("Play, RC: Go to playing"))
 
 					if inp.right_click:
 						pctl.show_current(highlight=True)
 
-				self.play_button.render(29 * gui.scale, window_size[1] - self.control_line_bottom, play_colour)
+				self.play_button.render(
+					buttons_x_offset + 29 * gui.scale, window_size[1] - self.control_line_bottom, play_colour)
 				# ddt.rect_r(rect,[255,0,0,255], True)
 
 			# PAUSE---
 			if compact:
-				buttons_x_offset = -46 * gui.scale
+				# Keep the centring shift; compact only drops the play button and
+				# pulls the rest left to close the gap it leaves.
+				buttons_x_offset = buttons_centre_shift - (46 * gui.scale)
 
 			x = (75 * gui.scale) + buttons_x_offset
 			y = window_size[1] - self.control_line_bottom
 
 			if not compact or (compact and pctl.playing_state == PlayingState.PLAYING):
 
-				rect = (x - 15 * gui.scale, y - 13 * gui.scale, 50 * gui.scale, 40 * gui.scale)
+				rect = (x - 15 * gui.scale, btn_hit_y, 50 * gui.scale, btn_hit_h)
 				self.fields.add(rect)
 				if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
 					pause_colour = mb_over
@@ -34225,7 +34261,7 @@ class BottomBarType1:
 
 			# STOP---
 			x = 125 * gui.scale + buttons_x_offset
-			rect = (x - 14 * gui.scale, y - 13 * gui.scale, 50 * gui.scale, 40 * gui.scale)
+			rect = (x - 14 * gui.scale, btn_hit_y, 50 * gui.scale, btn_hit_h)
 			self.fields.add(rect)
 			if self.coll(rect):
 				stop_colour = mb_over
@@ -34243,8 +34279,8 @@ class BottomBarType1:
 				buttons_x_offset -= 5 * gui.scale
 
 			# FORWARD---
-			rect = (buttons_x_offset + 230 * gui.scale, window_size[1] - self.control_line_bottom - 10 * gui.scale,
-					50 * gui.scale, 35 * gui.scale)
+			rect = (buttons_x_offset + 230 * gui.scale, btn_hit_y,
+					50 * gui.scale, btn_hit_h)
 			self.fields.add(rect)
 			if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
 				forward_colour = mb_over
@@ -34278,8 +34314,8 @@ class BottomBarType1:
 			# ddt.rect_r(rect,[255,0,0,255], True)
 
 			# BACK---
-			rect = (buttons_x_offset + 170 * gui.scale, window_size[1] - self.control_line_bottom - 10 * gui.scale,
-					50 * gui.scale, 35 * gui.scale)
+			rect = (buttons_x_offset + 170 * gui.scale, btn_hit_y,
+					50 * gui.scale, btn_hit_h)
 			self.fields.add(rect)
 			if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
 				back_colour = mb_over
@@ -34312,7 +34348,8 @@ class BottomBarType1:
 			# menu button
 
 			x = window_size[0] - 252 * gui.scale - right_offset
-			y = window_size[1] - round(26 * gui.scale)
+			# Raised onto the upper row with the volume bar and time, clear of the seek bar
+			y = window_size[1] - round(36 * gui.scale)
 			rpbc = md_off
 			rect = (x - 9 * gui.scale, y - 5 * gui.scale, 40 * gui.scale, 25 * gui.scale)
 			self.fields.add(rect)
@@ -34338,7 +34375,7 @@ class BottomBarType1:
 
 				# shuffle button
 				x = window_size[0] - 318 * gui.scale - right_offset
-				y = window_size[1] - 27 * gui.scale
+				y = window_size[1] - 37 * gui.scale
 
 				rect = (x - 5 * gui.scale, y - 5 * gui.scale, 60 * gui.scale, 25 * gui.scale)
 				self.fields.add(rect)
@@ -34394,7 +34431,7 @@ class BottomBarType1:
 
 				# REPEAT
 				x = window_size[0] - round(380 * gui.scale) - right_offset
-				y = window_size[1] - round(27 * gui.scale)
+				y = window_size[1] - round(37 * gui.scale)
 
 				rpbc = md_off
 				off = True
