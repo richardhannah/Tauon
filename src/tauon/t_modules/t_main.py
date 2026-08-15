@@ -33628,8 +33628,6 @@ class BottomBarType1:
 		cluster-width constant to keep in step.
 		"""
 		scale = self.gui.scale
-		compact = self.window_size[0] < 650 * scale
-		playing = self.pctl.playing_state == PlayingState.PLAYING
 
 		def make(with_modes: bool) -> ControlRow:
 			row = ControlRow(
@@ -33639,11 +33637,10 @@ class BottomBarType1:
 			# Shuffle and repeat bracket the transport, as they conventionally do
 			if with_modes:
 				row.add("shuffle", self.shuffle_button.w)
-			# In compact mode the row carries one of play/pause rather than both
-			if not compact or not playing:
-				row.add("play", self.play_button.w)
-			if not compact or playing:
-				row.add("pause", 14 * scale)  # two 4-wide bars, 10 apart
+			# A single play/pause toggle. Both glyphs are 14 wide - the play icon
+			# asset, and the two 4-wide pause bars set 10 apart - so the slot does
+			# not change size when the state flips.
+			row.add("playpause", self.play_button.w)
 			row.add("back", self.back_button.w)
 			row.add("forward", self.forward_button.w)
 			if with_modes:
@@ -33710,13 +33707,6 @@ class BottomBarType1:
 		ddt.rect_a((0, self.window_size[1] - self.gui.panelBY), (self.window_size[0], self.gui.panelBY), colours.bottom_panel_colour)
 		sdl3.SDL_SetRenderDrawBlendMode(self.renderer, sdl3.SDL_BLENDMODE_BLEND)
 
-		# Transport cluster geometry. The buttons are laid out from a fixed set of
-		# offsets starting at 29 (the play icon); in compact mode play is dropped and
-		# everything shifts left by 46, so the cluster starts at pause instead. Both
-		# cases begin at 29, only the span differs. Centring the whole cluster is then
-		# a single shift, reused below for the title's max width so the two cannot
-		# collide.
-		compact = window_size[0] < 650 * gui.scale
 		# Laid out up here because the track title below caps its width against the
 		# cluster's left edge, and the buttons themselves are drawn further down.
 		transport, _centred = self.build_transport_row()
@@ -34230,21 +34220,15 @@ class BottomBarType1:
 			y = window_size[1] - self.control_line_bottom
 			hit_pad = 12 * gui.scale
 
-			play_colour = mb_off
-			pause_colour = mb_off
+			pp_colour = mb_off
 			forward_colour = mb_off
 			back_colour = mb_off
 
-			if pctl.playing_state == PlayingState.PLAYING:
-				play_colour = mb_active
-
-			if pctl.playing_state == PlayingState.PAUSED:
-				pause_colour = mb_active
-				play_colour = mb_active
-			elif pctl.playing_state == PlayingState.URL_STREAM:
-				play_colour = mb_active
-				if tauon.stream_proxy.encode_running:
-					play_colour = ColourRGBA(220, 50, 50, 255)
+			# Anything other than stopped reads as active
+			if pctl.playing_state != PlayingState.STOPPED:
+				pp_colour = mb_active
+			if pctl.playing_state == PlayingState.URL_STREAM and tauon.stream_proxy.encode_running:
+				pp_colour = ColourRGBA(220, 50, 50, 255)
 
 			# SHUFFLE---
 			if transport.has("shuffle"):
@@ -34289,42 +34273,29 @@ class BottomBarType1:
 				else:
 					self.shuffle_button.render(sx, y, rpbc)
 
-			# PLAY---
-			if transport.has("play"):
-				rect = transport.hit("play", hit_pad)
-				self.fields.add(rect)
-				if self.coll(rect):
-					play_colour = mb_over
-					if inp.mouse_click:
-						if compact and pctl.playing_state == PlayingState.PLAYING:
-							pctl.pause()
-						elif pctl.playing_state == PlayingState.PLAYING:
-							pctl.show_current(highlight=True)
-						else:
-							pctl.play()
-						inp.mouse_click = False
-					tauon.tool_tip2.test(transport.x("play"), y - 35 * gui.scale, _("Play, RC: Go to playing"))
+			# PLAY / PAUSE---
+			# One button showing the action it will perform: pause while playing,
+			# play otherwise. pctl.play_pause() already resolves every state,
+			# including stopping a URL stream.
+			px = transport.x("playpause")
+			rect = transport.hit("playpause", hit_pad)
+			self.fields.add(rect)
+			showing_pause = pctl.playing_state == PlayingState.PLAYING
+			if self.coll(rect):
+				pp_colour = mb_over
+				if inp.mouse_click:
+					pctl.play_pause()
+					inp.mouse_click = False
+				if inp.right_click:
+					pctl.show_current(highlight=True)
+				tip = _("Pause") if showing_pause else _("Play, RC: Go to playing")
+				tauon.tool_tip2.test(px, y - 35 * gui.scale, tip)
 
-					if inp.right_click:
-						pctl.show_current(highlight=True)
-
-				self.play_button.render(transport.x("play"), y, play_colour)
-
-			# PAUSE---
-			if transport.has("pause"):
-				px = transport.x("pause")
-				rect = transport.hit("pause", hit_pad)
-				self.fields.add(rect)
-				if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
-					pause_colour = mb_over
-					if inp.mouse_click:
-						pctl.pause()
-					if inp.right_click:
-						pctl.show_current(highlight=True)
-					tauon.tool_tip2.test(px, y - 35 * gui.scale, _("Pause"))
-
-				ddt.rect_a((px, y), (4 * gui.scale, 13 * gui.scale), pause_colour)
-				ddt.rect_a((px + 10 * gui.scale, y), (4 * gui.scale, 13 * gui.scale), pause_colour)
+			if showing_pause:
+				ddt.rect_a((px, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
+				ddt.rect_a((px + 10 * gui.scale, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
+			else:
+				self.play_button.render(px, y, pp_colour)
 
 			# FORWARD---
 			rect = transport.hit("forward", hit_pad)
