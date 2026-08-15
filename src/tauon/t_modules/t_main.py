@@ -205,6 +205,7 @@ from tauon.t_modules.t_extra import (  # noqa: E402
 )
 from tauon.t_modules.t_guitar_chords import GuitarChords  # noqa: E402
 from tauon.t_modules.t_jellyfin import Jellyfin  # noqa: E402
+from tauon.t_modules.t_layout import ControlRow  # noqa: E402
 from tauon.t_modules.t_lyrics import genius, get_lrclib_challenge, lyric_sources, uses_scraping  # noqa: E402
 from tauon.t_modules.t_nowplaying_macos import MacNowPlayingHelper  # noqa: E402
 from tauon.t_modules.t_phazor import Cachement, get_phazor_path, phazor_exists, player4  # noqa: E402
@@ -33618,20 +33619,60 @@ class BottomBarType1:
 
 		self.scrob_stick = 0
 
+	def build_transport_row(self) -> tuple[ControlRow, bool]:
+		"""Lay out the transport buttons and report whether they ended up centred.
+
+		Shared by update() and render() so the seek bar and the buttons can never
+		disagree about the layout. The row measures itself from the items actually
+		present, so a hidden button needs no compensating offset and there is no
+		cluster-width constant to keep in step.
+		"""
+		scale = self.gui.scale
+		compact = self.window_size[0] < 650 * scale
+		playing = self.pctl.playing_state == PlayingState.PLAYING
+
+		row = ControlRow(
+			spacing=36 * scale,
+			hit_y=self.window_size[1] - self.control_line_bottom - (7 * scale),
+			hit_h=27 * scale)
+
+		# In compact mode the row carries one of play/pause rather than both
+		if not compact or not playing:
+			row.add("play", self.play_button.w)
+		if not compact or playing:
+			row.add("pause", 14 * scale)  # two 4-wide bars, 10 apart
+		row.add("back", self.back_button.w)
+		row.add("forward", self.forward_button.w)
+
+		# Only centre while there is room: the right-hand controls start at W - 380,
+		# so a centred cluster needs its own width plus roughly twice that clearance.
+		# Below that it would sit on top of them, so fall back to the left.
+		centred = self.window_size[0] > row.width + (800 * scale)
+		if centred:
+			row.place_centred(self.window_size[0] / 2)
+		else:
+			row.place(29 * scale)
+		return row, centred
+
 	def update(self) -> None:
 		if self.mode == 0:
 			self.volume_bar_position[0] = self.window_size[0] - (210 * self.gui.scale)
 			self.volume_bar_position[1] = self.window_size[1] - (36 * self.gui.scale)
 
-			# The seek bar sits on its own row underneath the centred transport
-			# cluster, inset equally from both edges so it stays centred on the
-			# window. On narrow windows the inset collapses to keep it usable.
-			seek_inset = 180 * self.gui.scale
-			if self.window_size[0] < 900 * self.gui.scale:
-				seek_inset = 40 * self.gui.scale
+			# The seek bar sits on its own row underneath the transport cluster.
+			# When the cluster is centred the bar is a proportion of the window so
+			# it stays in step at any size; when the cluster has fallen back to the
+			# left it spans nearly the full width instead, which reads better under
+			# left-aligned buttons and keeps the target usable on a small window.
+			_, centred = self.build_transport_row()
+			if centred:
+				seek_w = round(self.window_size[0] * 0.4)
+			else:
+				seek_w = self.window_size[0] - (80 * self.gui.scale)
+			seek_w = max(seek_w, 120 * self.gui.scale)
 
-			self.seek_bar_position[0] = seek_inset
-			self.seek_bar_size[0] = max(60 * self.gui.scale, self.window_size[0] - (seek_inset * 2))
+			self.seek_bar_position[0] = round((self.window_size[0] - seek_w) / 2)
+			self.seek_bar_size[0] = seek_w
 			self.seek_bar_position[1] = self.window_size[1] - (17 * self.gui.scale)
 			self.seek_bar_size[1] = 7 * self.gui.scale
 
@@ -33667,16 +33708,10 @@ class BottomBarType1:
 		# a single shift, reused below for the title's max width so the two cannot
 		# collide.
 		compact = window_size[0] < 650 * gui.scale
-		cluster_span = (165 if compact else 211) * gui.scale + self.forward_button.w
-		# Only centre while there is actually room. The right-hand controls start at
-		# W - 380 (repeat button), so a centred cluster needs roughly its own width
-		# plus twice that clearance; below it the cluster would sit straight on top of
-		# them, so fall back to the original left-aligned position.
-		if window_size[0] > cluster_span + (800 * gui.scale):
-			buttons_centre_shift = round((window_size[0] - cluster_span) / 2 - (29 * gui.scale))
-		else:
-			buttons_centre_shift = 0
-		cluster_left_x = (29 * gui.scale) + buttons_centre_shift
+		# Laid out up here because the track title below caps its width against the
+		# cluster's left edge, and the buttons themselves are drawn further down.
+		transport, _centred = self.build_transport_row()
+		cluster_left_x = transport.left
 
 		# Let the grey furniture inherit a hint of the local art hue/saturation
 		so = tauon.style_overlay
@@ -34180,27 +34215,19 @@ class BottomBarType1:
 		# bottom buttons
 
 		if gui.mode == GuiMode.MAIN:
-			# PLAY---
-			# `compact` and the centring shift are computed once at the top of render()
-			buttons_x_offset = buttons_centre_shift
-
-			# Shared hit band for the transport buttons. Now that the cluster is
-			# centred it sits over the content area and the seek bar, so the band is
-			# clamped to the panel's top edge and stops short of the seek bar row.
-			btn_hit_y = window_size[1] - self.control_line_bottom - (7 * gui.scale)
-			btn_hit_h = 27 * gui.scale
+			# The transport row was laid out at the top of render(); positions and hit
+			# rects both come from it, so they cannot drift apart. Keep hit_pad below
+			# half the row spacing or adjacent rects overlap.
+			y = window_size[1] - self.control_line_bottom
+			hit_pad = 12 * gui.scale
 
 			play_colour = mb_off
 			pause_colour = mb_off
-			stop_colour = mb_off
 			forward_colour = mb_off
 			back_colour = mb_off
 
 			if pctl.playing_state == PlayingState.PLAYING:
 				play_colour = mb_active
-
-			if pctl.stop_mode != StopMode.OFF:
-				stop_colour = mb_active
 
 			if pctl.playing_state == PlayingState.PAUSED:
 				pause_colour = mb_active
@@ -34210,10 +34237,9 @@ class BottomBarType1:
 				if tauon.stream_proxy.encode_running:
 					play_colour = ColourRGBA(220, 50, 50, 255)
 
-			if not compact or (compact and pctl.playing_state != PlayingState.PLAYING):
-				rect = (
-				buttons_x_offset + (10 * gui.scale), btn_hit_y,
-				50 * gui.scale, btn_hit_h)
+			# PLAY---
+			if transport.has("play"):
+				rect = transport.hit("play", hit_pad)
 				self.fields.add(rect)
 				if self.coll(rect):
 					play_colour = mb_over
@@ -34225,27 +34251,17 @@ class BottomBarType1:
 						else:
 							pctl.play()
 						inp.mouse_click = False
-					tauon.tool_tip2.test(buttons_x_offset + 33 * gui.scale, y - 35 * gui.scale, _("Play, RC: Go to playing"))
+					tauon.tool_tip2.test(transport.x("play"), y - 35 * gui.scale, _("Play, RC: Go to playing"))
 
 					if inp.right_click:
 						pctl.show_current(highlight=True)
 
-				self.play_button.render(
-					buttons_x_offset + 29 * gui.scale, window_size[1] - self.control_line_bottom, play_colour)
-				# ddt.rect_r(rect,[255,0,0,255], True)
+				self.play_button.render(transport.x("play"), y, play_colour)
 
 			# PAUSE---
-			if compact:
-				# Keep the centring shift; compact only drops the play button and
-				# pulls the rest left to close the gap it leaves.
-				buttons_x_offset = buttons_centre_shift - (46 * gui.scale)
-
-			x = (75 * gui.scale) + buttons_x_offset
-			y = window_size[1] - self.control_line_bottom
-
-			if not compact or (compact and pctl.playing_state == PlayingState.PLAYING):
-
-				rect = (x - 15 * gui.scale, btn_hit_y, 50 * gui.scale, btn_hit_h)
+			if transport.has("pause"):
+				px = transport.x("pause")
+				rect = transport.hit("pause", hit_pad)
 				self.fields.add(rect)
 				if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
 					pause_colour = mb_over
@@ -34253,34 +34269,13 @@ class BottomBarType1:
 						pctl.pause()
 					if inp.right_click:
 						pctl.show_current(highlight=True)
-					tauon.tool_tip2.test(x, y - 35 * gui.scale, _("Pause"))
+					tauon.tool_tip2.test(px, y - 35 * gui.scale, _("Pause"))
 
-				# ddt.rect_r(rect,[255,0,0,255], True)
-				ddt.rect_a((x, y + 0), (4 * gui.scale, 13 * gui.scale), pause_colour)
-				ddt.rect_a((x + 10 * gui.scale, y + 0), (4 * gui.scale, 13 * gui.scale), pause_colour)
-
-			# STOP---
-			x = 125 * gui.scale + buttons_x_offset
-			rect = (x - 14 * gui.scale, btn_hit_y, 50 * gui.scale, btn_hit_h)
-			self.fields.add(rect)
-			if self.coll(rect):
-				stop_colour = mb_over
-				if inp.mouse_click:
-					pctl.stop()
-				if inp.right_click:
-					#pctl.auto_stop ^= True
-					tauon.stop_menu.activate(position=(x - 0 * gui.scale, y - 6 * gui.scale))
-				#tauon.tool_tip2.test(x, y - 35 * gui.scale, _("Stop, RC: Toggle auto-stop"))
-
-			ddt.rect_a((x, y + 0), (13 * gui.scale, 13 * gui.scale), stop_colour)
-			# ddt.rect_r(rect,[255,0,0,255], True)
-
-			if compact:
-				buttons_x_offset -= 5 * gui.scale
+				ddt.rect_a((px, y), (4 * gui.scale, 13 * gui.scale), pause_colour)
+				ddt.rect_a((px + 10 * gui.scale, y), (4 * gui.scale, 13 * gui.scale), pause_colour)
 
 			# FORWARD---
-			rect = (buttons_x_offset + 230 * gui.scale, btn_hit_y,
-					50 * gui.scale, btn_hit_h)
+			rect = transport.hit("forward", hit_pad)
 			self.fields.add(rect)
 			if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
 				forward_colour = mb_over
@@ -34308,14 +34303,10 @@ class BottomBarType1:
 			else:
 				gui.tool_tip_lock_off_f = False
 
-			self.forward_button.render(
-				buttons_x_offset + 240 * gui.scale, 1 + window_size[1] - self.control_line_bottom, forward_colour)
-
-			# ddt.rect_r(rect,[255,0,0,255], True)
+			self.forward_button.render(transport.x("forward"), 1 + y, forward_colour)
 
 			# BACK---
-			rect = (buttons_x_offset + 170 * gui.scale, btn_hit_y,
-					50 * gui.scale, btn_hit_h)
+			rect = transport.hit("back", hit_pad)
 			self.fields.add(rect)
 			if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
 				back_colour = mb_over
@@ -34337,13 +34328,11 @@ class BottomBarType1:
 					pctl.revert()
 					gui.tool_tip_lock_off_b = True
 				if not gui.tool_tip_lock_off_b:
-					tauon.tool_tip2.test(x, y - 35 * gui.scale, _("Back, RC: Toggle repeat, MC: Revert"))
+					tauon.tool_tip2.test(transport.x("back"), y - 35 * gui.scale, _("Back, RC: Toggle repeat, MC: Revert"))
 			else:
 				gui.tool_tip_lock_off_b = False
 
-			self.back_button.render(buttons_x_offset + 180 * gui.scale, 1 + window_size[1] - self.control_line_bottom,
-									back_colour)
-			# ddt.rect_r(rect,[255,0,0,255], True)
+			self.back_button.render(transport.x("back"), 1 + y, back_colour)
 
 			# menu button
 
