@@ -33634,14 +33634,16 @@ class BottomBarType1:
 				spacing=36 * scale,
 				hit_y=self.window_size[1] - self.control_line_bottom - (7 * scale),
 				hit_h=27 * scale)
-			# Shuffle and repeat bracket the transport, as they conventionally do
+			# Declaration order is display order. Shuffle and repeat bracket the
+			# transport, with play/pause centred between skip back and skip forward,
+			# as media players conventionally arrange them.
 			if with_modes:
 				row.add("shuffle", self.shuffle_button.w)
+			row.add("back", self.back_button.w)
 			# A single play/pause toggle. Both glyphs are 14 wide - the play icon
 			# asset, and the two 4-wide pause bars set 10 apart - so the slot does
 			# not change size when the state flips.
 			row.add("playpause", self.play_button.w)
-			row.add("back", self.back_button.w)
 			row.add("forward", self.forward_button.w)
 			if with_modes:
 				row.add("repeat", self.repeat_button.w)
