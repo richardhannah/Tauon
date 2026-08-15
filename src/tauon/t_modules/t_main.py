@@ -39360,11 +39360,12 @@ class PlaylistBox:
 
 		row_step = self.gap + self.tab_h
 		top_pad = 5 * gui.scale
+		# Tabs are snapped to whole rows. TDraw has no scissor, so a row that does not
+		# fit inside the panel cannot be clipped - it must simply not be drawn, or it
+		# paints straight through the bottom panel.
 		max_tabs = max(0, int((h - top_pad + self.gap) // max(row_step, 1)))
 		scroll_needed = len(pctl.multi_playlist) > max_tabs
-		bottom_pad = 12 * gui.scale if scroll_needed else 0
-		visible_scroll_rows = max(0, ((h - top_pad - bottom_pad - self.tab_h) / max(row_step, 1)) + 1)
-		max_scroll = max(len(pctl.multi_playlist) - visible_scroll_rows, 0)
+		max_scroll = max(len(pctl.multi_playlist) - max_tabs, 0)
 
 		tab_title_colour = self.colours.tab_text
 
@@ -39404,7 +39405,7 @@ class PlaylistBox:
 		if self.colours.lm:
 			w -= round(6 * gui.scale)
 		tab_width = w - tab_start  # - 0 * gui.scale
-		visible_tab_limit = max_tabs + 1 if show_scroll else max_tabs
+		visible_tab_limit = max_tabs
 
 		def clipped_to_box(rect):
 			rect_y = max(rect[1], y)
@@ -39430,9 +39431,11 @@ class PlaylistBox:
 		# Process inputs
 		delete_pl = None
 		tab_on = 0
+		# Render from a row boundary so neither the first nor the last visible tab is
+		# half-drawn. self.scroll_on itself stays fractional so that slow scroll input
+		# still accumulates and eventually steps the list by one whole row.
 		scroll_start = int(self.scroll_on)
-		scroll_offset = (self.scroll_on - scroll_start) * max(row_step, 1)
-		yy = y + top_pad - scroll_offset
+		yy = y + top_pad
 		for i, pl in enumerate(pctl.multi_playlist):
 
 			if tab_on >= visible_tab_limit:
@@ -39529,7 +39532,7 @@ class PlaylistBox:
 		# Draw tabs
 		# delete_pl = None
 		tab_on = 0
-		yy = y + top_pad - scroll_offset
+		yy = y + top_pad
 		for i, pl in enumerate(pctl.multi_playlist):
 
 			# if yy + self.tab_h > y + h:
