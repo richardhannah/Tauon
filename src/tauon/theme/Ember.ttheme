@@ -1,0 +1,114 @@
+# Tauon Music Box theme file
+# Ember - a restrained dark theme: one warm accent, neutral greys, and every
+# text colour kept above a 4.5:1 contrast ratio against the surface behind it.
+#
+# Design rules used here:
+#   1. ONE accent hue (amber 232,184,75). It is spent only on the playing track,
+#      active modes, and progress - never on ordinary rows.
+#   2. Hierarchy comes from LUMINANCE, not from hue. Title > artist > time/index.
+#   3. Nothing readable falls below 4.5:1. Icons and dividers stay above 3:1.
+#
+# Contrast ratios in the comments are measured against the panel that element
+# sits on, using the WCAG 2.x relative-luminance formula.
+
+
+#-Backgrounds-----
+# Layered surfaces: side panel recedes, content sits forward, chrome frames it.
+
+26,26,30        player background (top panel)
+21,21,25        playlist panel
+17,17,20        side panel
+26,26,30        bottom panel
+21,21,25        gallery background
+18,18,22        queue panel
+
+
+#-Playlist-------
+# Resting rows are pure neutral. Only the playing row carries the accent.
+
+228,228,231     track line      # 14.35:1 - primary, the thing you actually read
+154,154,163     track artist    # 6.53:1  - secondary
+139,139,148     track time      # 5.39:1  - was 1.94:1 in Wasp, unreadable
+139,139,148     track index     # 5.39:1  - was 1.94:1 in Wasp, unreadable
+138,136,148     album line      # 5.23:1  - a section divider, not a headline
+
+232,184,75      track playing   # 9.88:1  - the single accent, earns attention
+198,160,96      artist playing  # 7.46:1
+198,160,96      album playing   # 7.46:1
+176,150,105     index playing   # 6.43:1
+176,150,105     time playing    # 6.43:1
+
+130,130,138     track missing   # 4.78:1  - dimmed but still legible
+
+176,150,105     fav line
+48,48,54        folder line
+168,168,178     folder title    # 7.73:1
+
+232,184,75,16   playing highlight
+255,255,255,14  select highlight
+232,184,75      gallery highlight
+
+
+#-Menu-------------
+
+28,28,33        menu background
+48,48,56        menu highlight
+232,232,236     menu text          # 13.89:1
+138,138,146     menu disable text  # 4.95:1 - was 1.49:1 in Wasp, invisible
+
+
+#-Bottom panel------
+
+120,120,128     buttons off     # 3.96:1 - was 55,55,55, effectively invisible
+240,240,244     buttons over    # 15.26:1
+232,232,236     buttons active  # 14.20:1
+
+232,184,75      playing time    # 9.41:1
+
+210,168,72      seek bar
+46,46,52        seek bg
+180,180,190     volume bar
+46,46,52        volume bg
+62,62,70        scroll bar
+
+110,110,118     mode off        # 3.43:1 - was 50,50,50
+236,236,240     mode over       # 14.72:1
+232,184,75      mode on         # 9.41:1 - accent marks what is actually enabled
+
+232,232,236     bottom title    # 14.20:1
+
+
+#-Top panel---------
+
+240,240,244     tab active line      # 15.26:1
+168,168,178     tab line             # 7.36:1
+32,32,37        tab background
+48,48,56        tab over
+44,44,51        tab active background
+232,184,75      music vis
+
+# The MENU label in the header - undefined in Wasp, so it fell back to a
+# near-disabled grey. Defining it explicitly fixes the "looks greyed out" read.
+168,168,178     menu button normal   # 7.36:1
+240,240,244     menu button hover    # 15.26:1
+
+
+#-Side panel--------
+
+232,232,236     title info      # 15.42:1
+168,168,178     extra info      # 8.00:1
+34,34,40        art border
+
+
+#-Lyrics / misc-----
+
+200,200,208     lyrics text
+232,184,75      active lyric
+235,190,100     link text
+176,150,105     star line playing
+
+
+#-Mini Mode---------
+
+21,21,25        mini bg
+70,70,78        mini border

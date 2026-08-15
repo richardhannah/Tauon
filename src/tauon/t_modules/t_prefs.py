@@ -293,8 +293,10 @@ class Prefs:
 	center_gallery_text: bool = False
 
 	tracklist_y_text_offset = 0
-	theme: int = 14
-	theme_name = "Vape"
+	# Keep these two in sync: `theme` is the 1-based index into the alphabetically
+	# sorted theme list, which shifts whenever a theme file is added or removed.
+	theme: int = 6
+	theme_name = "Ember"
 	transparent_mode: int = 0
 	rounded_corners: bool = False
 	corner_radius: int = 10
