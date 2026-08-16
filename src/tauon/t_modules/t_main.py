@@ -919,7 +919,12 @@ class GuiVar:
 		if self.bag.phone:
 			self.rsp = False
 		self.rspw: float = round(300 * self.scale)
-		self.lsp: bool = False
+		# The playlist side panel is the app's main navigation. With it off the
+		# only way between playlists is the top tab strip, which overflows into a
+		# chevron as soon as there are more playlists than fit across the window -
+		# so a new user with a real library never saw most of them. Not on a phone,
+		# where 220px of a 720px window is too much (same reasoning as rsp above).
+		self.lsp: bool = not self.bag.phone
 		self.lspw: float = round(220 * self.scale)
 		self.lsp_x: float = 0
 		self.plw: float | None = None
