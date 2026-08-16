@@ -830,10 +830,16 @@ class GuiVar:
 		self.set_label_point = (0, 0)
 		self.set_point = 0
 		self.set_old = 0
+		# Default columns. Deliberately short: at the first-run window size the
+		# track list is about 600px wide, and the previous nine-column default
+		# spent ~250px of that on Starline, Date, Codec and P while squeezing
+		# Artist to ~90px and Title to ~105px - so a new user's first view
+		# truncated both of the fields they actually read. These five leave the
+		# flexible columns room to breathe at 1120px and still stretch to fill a
+		# wide window. The rest are one right-click on the column header away.
 		self.pl_st: list[list[str | int | bool]] = [
-			["Artist", 156, False], ["Title", 188, False], ["T", 40, True], ["Album", 153, False],
-			["P", 28, True], ["Starline", 86, True], ["Date", 48, True], ["Codec", 55, True],
-			["Time", 53, True]]
+			["Artist", 156, False], ["Title", 188, False], ["T", 40, True],
+			["Album", 153, False], ["Time", 53, True]]
 		self.pl_box_h: int = 0
 
 		# Leading inset before the first column in columns (set) mode. Kept as an
