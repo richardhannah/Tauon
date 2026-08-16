@@ -26059,6 +26059,7 @@ class SearchOverlay:
 
 		self.active: bool = False
 		self.search_text: TextBox = TextBox(tauon)
+		self.search_icon = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "station-search.png", True)
 
 		self.results: list[tuple[int, list[int | str | None]]] = []
 		self.searched_text: str = ""
@@ -26533,8 +26534,36 @@ class SearchOverlay:
 					self.ddt.text((self.window_size[0] // 2, 200 * gui.scale, 2), _("No results found"), ColourRGBA(250, 250, 250, 255), 216,
 						bg=ColourRGBA(12, 12, 12, 255))
 
-			self.search_text.draw(input_text_x, 60 * gui.scale, ColourRGBA(230, 230, 230, 255), True, False, 30,
-				self.window_size[0] - 100, big=True, click=gui.level_2_click, selection_height=30)
+			# The search field. It was a bare line of text spanning the whole
+			# window, which on a wide one is a very long way from looking like
+			# something you type into. Now: a bordered box with a magnifier and a
+			# placeholder, its right edge aligned with the result rows' highlight
+			# strip below and its text with their titles, so the query reads as
+			# the head of the list rather than a stray line above it.
+			field_left = input_text_x - 12 * gui.scale
+			field_right = min(highlight_x + 600 * gui.scale, self.window_size[0] - 20 * gui.scale)
+			field = Rect(field_left, 44 * gui.scale, field_right - field_left, 46 * gui.scale)
+			field_bg = ColourRGBA(24, 24, 26, 255)
+			self.ddt.rect(field, field_bg)
+			self.ddt.rect_si(field, ColourRGBA(58, 58, 62, 255), max(1, round(gui.scale)))
+			self.ddt.text_background_colour = field_bg
+
+			icon = self.search_icon
+			icon.render(
+				round(field.x + 14 * gui.scale), round(field.centre_y - (icon.h / 2)),
+				ColourRGBA(150, 150, 154, 255))
+
+			# Text starts at text_lx, the same left edge the result titles use.
+			if not self.search_text.text:
+				self.ddt.text(
+					(text_lx, 60 * gui.scale), _("Search your library"),
+					ColourRGBA(112, 112, 116, 255), 30, bg=field_bg)
+
+			self.search_text.draw(
+				text_lx, 60 * gui.scale, ColourRGBA(230, 230, 230, 255), True, False, 30,
+				round(field.right - text_lx - 14 * gui.scale), big=True, click=gui.level_2_click,
+				selection_height=30)
+			self.ddt.text_background_colour = overlay_background
 
 			if inp.input_text or inp.key_backspace_press:
 				self.input_timer.set()
