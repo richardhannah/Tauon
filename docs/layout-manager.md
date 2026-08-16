@@ -95,22 +95,44 @@ makes future upstream merges harder. Prefer changes that are additive or local.
 
 ## Requirements
 
-### R1. Clipping is a prerequisite, not a feature
+### R1. Clipping is a prerequisite, not a feature — **done**
 
-`TDraw` has no scissor or clip support: `rect()` and `text()` take no clip rect,
-and there is no push/pop of a clipping region. A widget therefore cannot be
-prevented from drawing outside its own bounds.
+A widget must be preventable from drawing outside its own bounds, otherwise "a
+widget stays inside its rect" is unenforceable and no layout abstraction built on
+top can be made robust.
 
-This is not hypothetical. `PlaylistBox.draw` deliberately renders one tab beyond
-the panel as a scroll affordance, and the `clipped_to_box()` helper defined right
-there guards only the *hit* rect — not the background rect, not the text. The
-overflow row painted through the bottom panel. Because nothing could clip it, the
-fix had to be "do not draw the row" rather than "clip the row".
+This was not hypothetical. `PlaylistBox.draw` renders one tab beyond the panel as
+a scroll affordance, and the `clipped_to_box()` helper defined right there guards
+only the *hit* rect — not the background rect, not the text. The overflow row
+painted through the bottom panel. Because nothing could clip it, the fix had to
+be "do not draw the row" rather than "clip the row"; that panel has since been
+put back on the affordance, with the row clipped at the panel edge.
 
-SDL provides `SDL_SetRenderClipRect`. A clip stack in `TDraw`, honoured by
-`rect()` and `text()`, is the single highest-value change in the codebase. **No
-layout abstraction can be made robust before this exists**, because "a widget
-stays inside its rect" is otherwise unenforceable.
+`TDraw` now has a clip stack over `SDL_SetRenderClipRect`:
+
+```python
+with ddt.clip(rect):
+    ...  # or ddt.push_clip(rect) / ddt.pop_clip()
+```
+
+Because SDL applies the clip at the renderer level it covers everything —
+`rect()`, `text()`, lines, images and raw `SDL_RenderTexture` calls — not just
+the two primitives. Pushes nest by intersection, so a child can only shrink its
+parent's region; an empty intersection draws nothing rather than silently
+disabling the clip. `ddt.clipped_out(rect)` reports whether something is wholly
+outside the active clip, for callers that want to skip the work rather than pay
+for invisible drawing. The stack is reset in `new_frame()`, so an unbalanced push
+warns once and cannot blank the session.
+
+Two behaviours worth knowing, both verified against SDL 3.4:
+
+- The clip belongs to the **current render target's** view. SDL keeps one per
+  target and swaps it in `SDL_SetRenderTarget`, so a push and its pop must
+  bracket drawing on one target. Code that renders into its own texture inside a
+  clip draws unclipped in that texture's own coordinate space — correct, since it
+  has its own origin — and the blit back is clipped as normal.
+- Call sites must not set `SDL_SetRenderClipRect` directly. Resetting it to
+  `None` by hand discards whatever clip an outer caller had pushed.
 
 ### R2. A widget receives its rect and never reads the window
 
@@ -189,9 +211,18 @@ theme change the entire look without touching a layout call site.
 
 Ordered cheapest-first, each phase independently useful and shippable.
 
-**Phase 0 — clipping in `TDraw`.** Push/pop clip stack over
-`SDL_SetRenderClipRect`, honoured by `rect()` and `text()`. Everything else
-depends on it (R1).
+**Phase 0 — clipping in `TDraw`. Done.** Push/pop clip stack over
+`SDL_SetRenderClipRect`, honoured by every draw path. Everything else depends on
+it (R1). Applied so far to `PlaylistBox`, which bounds its tabs to the panel and
+draws the overflow row again, and to `SpectrogramWidget`, which was setting the
+SDL clip rect by hand. The custom-layout engine could bound each widget to its
+segment, which would enforce R1 everywhere at once — but it would also clip menus
+opened from inside a widget, so it needs a "chrome escapes the clip" rule first.
+
+Note that clipping constrains *drawing* only. Hit rects are still trimmed by hand
+(`clipped_to_box()`), so a partially visible row stays clickable exactly where it
+is visible — the R3 problem in miniature, and one of the things a control helper
+should absorb.
 
 **Phase 1 — a control helper.** One function bundling rect, `coll`, hover
 colour, click dispatch, `fields.add` and tooltip. This pattern is written out by

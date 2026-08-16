@@ -442,18 +442,16 @@ class SpectrogramWidget(Widget):
 			else:
 				runs = [(start, cls._cols - start), (0, visible - (cls._cols - start))]
 
-			clip = sdl3.SDL_Rect(rect[0], rect[1], rect[2], rect[3])
-			sdl3.SDL_SetRenderClipRect(tauon.renderer, ctypes.byref(clip))
-			# The newest column's left edge sits at (right - offset): it is
-			# revealed from the right edge as time passes, then the next column
-			# lands exactly where it left off — constant leftward velocity.
-			dx = x + w - offset - (visible - 1) * col_px
-			for s, n in runs:
-				src = sdl3.SDL_FRect(s, 0, n, bins)
-				dst = sdl3.SDL_FRect(dx, y, n * col_px, h)
-				sdl3.SDL_RenderTexture(tauon.renderer, cls._tex, ctypes.byref(src), ctypes.byref(dst))
-				dx += n * col_px
-			sdl3.SDL_SetRenderClipRect(tauon.renderer, None)
+			with tauon.ddt.clip(rect):
+				# The newest column's left edge sits at (right - offset): it is
+				# revealed from the right edge as time passes, then the next column
+				# lands exactly where it left off — constant leftward velocity.
+				dx = x + w - offset - (visible - 1) * col_px
+				for s, n in runs:
+					src = sdl3.SDL_FRect(s, 0, n, bins)
+					dst = sdl3.SDL_FRect(dx, y, n * col_px, h)
+					sdl3.SDL_RenderTexture(tauon.renderer, cls._tex, ctypes.byref(src), ctypes.byref(dst))
+					dx += n * col_px
 
 		if tauon.coll(rect) and tauon.inp.right_click and tauon.is_level_zero(False):
 			tauon.spectrogram_menu.activate()

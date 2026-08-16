@@ -23,6 +23,7 @@ import io
 import logging
 import math
 from collections import OrderedDict
+from contextlib import contextmanager
 from ctypes import byref, c_bool, c_float, c_size_t
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,7 @@ from PIL import Image
 from tauon.t_modules.t_extra import ColourRGBA, Timer, alpha_blend, coll_rect
 
 if TYPE_CHECKING:
+	from collections.abc import Iterator
 	from io import BytesIO
 
 	from tauon.t_modules.t_main import Tauon
@@ -177,11 +179,114 @@ class TDraw:
 
 		self._locate_cache: dict[tuple[str, int], Pango.Layout] = {}
 
+		# Clipping. Each entry is an absolute (x1, y1, x2, y2) box; see push_clip.
+		self._clip_stack: list[tuple[int, int, int, int]] = []
+		self._clip_sdlrect = sdl3.SDL_Rect(0, 0, 0, 0)
+
 	def load_image(self, g: BytesIO) -> sdl3.LP_SDL_Surface:
 		size = g.getbuffer().nbytes
 		pointer = ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(g.getbuffer())))
 		stream = sdl3.SDL_IOFromMem(pointer, c_size_t(size))
 		return sdl3.IMG_Load_IO(stream, c_bool(True))
+
+	# --- Clipping -----------------------------------------------------------
+	#
+	# SDL applies a clip rectangle at the renderer level, so everything drawn
+	# while one is active is clipped: rect(), text(), lines, images and raw
+	# SDL_RenderTexture calls alike. This makes "a widget stays inside its rect"
+	# enforceable rather than a convention (see docs/layout-manager.md, R1).
+	#
+	# Pushes nest by intersection, so a child can only ever shrink its parent's
+	# region, never escape it. Prefer the clip() context manager, which pops
+	# even if the drawing code raises.
+	#
+	# The clip lives on the *current render target's* view — SDL keeps one view
+	# per target and swaps it in SDL_SetRenderTarget. Push and pop must
+	# therefore bracket drawing on one target; code that renders into its own
+	# texture inside a clip draws unclipped in that texture's space (correct:
+	# it has its own origin) and the resulting blit is clipped as normal.
+
+	def push_clip(self, rectangle: tuple[int, int, int, int]) -> None:
+		"""Restrict drawing to `rectangle`, intersected with any clip already pushed."""
+		x1 = round(rectangle[0])
+		y1 = round(rectangle[1])
+		x2 = round(rectangle[0] + rectangle[2])
+		y2 = round(rectangle[1] + rectangle[3])
+
+		if self._clip_stack:
+			px1, py1, px2, py2 = self._clip_stack[-1]
+			x1 = max(x1, px1)
+			y1 = max(y1, py1)
+			x2 = min(x2, px2)
+			y2 = min(y2, py2)
+
+		# An empty intersection is kept as a zero-size rect, which SDL still
+		# treats as clipping enabled (so nothing draws). A negative size would
+		# instead turn clipping off entirely, which is the opposite of intent.
+		x2 = max(x2, x1)
+		y2 = max(y2, y1)
+
+		self._clip_stack.append((x1, y1, x2, y2))
+		self._apply_clip()
+
+	def pop_clip(self) -> None:
+		if not self._clip_stack:
+			logging.warning("TDraw.pop_clip() called with no clip pushed")
+			return
+		self._clip_stack.pop()
+		self._apply_clip()
+
+	@contextmanager
+	def clip(self, rectangle: tuple[int, int, int, int]) -> Iterator[None]:
+		"""Context manager form of push_clip/pop_clip."""
+		self.push_clip(rectangle)
+		try:
+			yield
+		finally:
+			self.pop_clip()
+
+	def reset_clip(self) -> None:
+		"""Drop any active clip. Called at the start of each frame so an
+		unbalanced push cannot blank the rest of the session."""
+		if not self._clip_stack:
+			return
+		logging.warning(f"Clip stack was left with {len(self._clip_stack)} entry(s) at frame end")
+		self._clip_stack.clear()
+		self._apply_clip()
+
+	def get_clip(self) -> tuple[int, int, int, int] | None:
+		"""The active clip as (x, y, w, h), or None if drawing is unclipped."""
+		if not self._clip_stack:
+			return None
+		x1, y1, x2, y2 = self._clip_stack[-1]
+		return (x1, y1, x2 - x1, y2 - y1)
+
+	def clipped_out(self, rectangle: tuple[int, int, int, int]) -> bool:
+		"""True if `rectangle` is wholly outside the active clip.
+
+		Drawing is clipped either way; this is for callers that want to skip
+		work (text rasterisation, hit tests) for something that cannot show."""
+		if not self._clip_stack:
+			return False
+		x1, y1, x2, y2 = self._clip_stack[-1]
+		return not (
+			rectangle[0] < x2
+			and rectangle[1] < y2
+			and rectangle[0] + rectangle[2] > x1
+			and rectangle[1] + rectangle[3] > y1
+		)
+
+	def _apply_clip(self) -> None:
+		if not self._clip_stack:
+			sdl3.SDL_SetRenderClipRect(self.renderer, None)
+			return
+		x1, y1, x2, y2 = self._clip_stack[-1]
+		r = self._clip_sdlrect
+		r.x = x1
+		r.y = y1
+		r.w = x2 - x1
+		r.h = y2 - y1
+		sdl3.SDL_SetRenderClipRect(self.renderer, byref(r))
 
 	def rect_s(self, rectangle: tuple[int, int, int, int], colour: ColourRGBA, thickness: int) -> None:
 		sdl3.SDL_SetRenderDrawColor(self.renderer, colour.r, colour.g, colour.b, colour.a)
@@ -319,6 +424,7 @@ class TDraw:
 		of cacheable text draws in the main UI last frame plus the track list's
 		last render, with 50% headroom, so everything visible stays cached
 		instead of thrashing against a fixed limit."""
+		self.reset_clip()
 		self.max_text_texture_cache_items = int((self._frame_text_draws + self._tracklist_text_draws) * 1.5)
 		self._frame_text_draws = 0
 		self._counting_tracklist = False

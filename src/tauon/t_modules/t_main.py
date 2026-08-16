@@ -39324,11 +39324,15 @@ class PlaylistBox:
 		self.ddt.rect((x, y, w, h), self.colours.playlist_box_background)
 		self.ddt.text_background_colour = self.colours.playlist_box_background
 
+		# The panel's own rect, taken before w is trimmed for lm themes below, so
+		# the clip around the tab loop always covers the whole panel.
+		panel_rect = (x, y, w, h)
+
 		row_step = self.gap + self.tab_h
 		top_pad = 5 * gui.scale
-		# Tabs are snapped to whole rows. TDraw has no scissor, so a row that does not
-		# fit inside the panel cannot be clipped - it must simply not be drawn, or it
-		# paints straight through the bottom panel.
+		# Whole rows that fit in the panel. Scrolling steps by whole rows, so this
+		# is the unit the scroll range is measured in; one further row is drawn
+		# past it as an affordance (see visible_tab_limit).
 		max_tabs = max(0, int((h - top_pad + self.gap) // max(row_step, 1)))
 		scroll_needed = len(pctl.multi_playlist) > max_tabs
 		max_scroll = max(len(pctl.multi_playlist) - max_tabs, 0)
@@ -39371,9 +39375,17 @@ class PlaylistBox:
 		if self.colours.lm:
 			w -= round(6 * gui.scale)
 		tab_width = w - tab_start  # - 0 * gui.scale
-		visible_tab_limit = max_tabs
+		# One row beyond the whole ones, drawn as a scroll affordance: the clip
+		# around the draw loop cuts it at the panel's bottom edge, so a
+		# half-visible tab is the signal that there is more below. The row is
+		# absent when the list ends, so the affordance appears only when it is
+		# true. When nothing overflows, the extra iteration finds no playlist.
+		visible_tab_limit = max_tabs + 1
 
 		def clipped_to_box(rect):
+			"""Trim a hit rect to the panel. Clipping applies to drawing only,
+			so the partial bottom row must be made unclickable separately -
+			otherwise it answers clicks landing on the panel below it."""
 			rect_y = max(rect[1], y)
 			rect_bottom = min(rect[1] + rect[3], y + h)
 			if rect_bottom <= rect_y:
@@ -39495,140 +39507,143 @@ class PlaylistBox:
 
 			yy += self.tab_h + self.gap
 
-		# Draw tabs
-		# delete_pl = None
-		tab_on = 0
-		yy = y + top_pad
-		for i, pl in enumerate(pctl.multi_playlist):
+		# Bound the tabs to the panel. Nothing drawn below can escape it, which is
+		# what lets the bottom row be drawn partially rather than skipped.
+		with self.ddt.clip(panel_rect):
+			# Draw tabs
+			# delete_pl = None
+			tab_on = 0
+			yy = y + top_pad
+			for i, pl in enumerate(pctl.multi_playlist):
 
-			# if yy + self.tab_h > y + h:
-			#     break
-			if tab_on >= visible_tab_limit:
-				break
-			if i < scroll_start:
-				continue
+				# if yy + self.tab_h > y + h:
+				#     break
+				if tab_on >= visible_tab_limit:
+					break
+				if i < scroll_start:
+					continue
 
-			tab_on += 1
+				tab_on += 1
 
-			name = pl.title
-			hidden = pl.hidden
+				name = pl.title
+				hidden = pl.hidden
 
-			# Background is invisible by default (for highlighting if selected)
-			bg = ColourRGBA(0, 0, 0, 0)
-			if self.prefs.transparent_mode:
-				bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.09, 0)
-				bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
-
-			drop_hit_rect = clipped_to_box(
-				(tab_start + 50 * gui.scale, yy - 1, tab_width - 50 * gui.scale, (self.tab_h + 1))
-			)
-
-			# Highlight if playlist selected (viewing)
-			if i == pctl.active_playlist_viewing or (tauon.tab_menu.active and tauon.tab_menu.reference == i):
-				# bg = [255, 255, 255, 25]
-
-				# Adjust highlight for different background brightnesses
-				bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.06, 0)
-				if light_mode:
-					bg = ColourRGBA(0, 0, 0, 25)
+				# Background is invisible by default (for highlighting if selected)
+				bg = ColourRGBA(0, 0, 0, 0)
 				if self.prefs.transparent_mode:
-					bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.03, 0)
+					bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.09, 0)
 					bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
 
-			# Highlight target playlist when tragging tracks over
-			if drop_hit_rect is not None and self.coll(drop_hit_rect) and self.inp.quick_drag and not (
-				pctl.gen_codes.get(pctl.pl_to_id(i)) and "self" not in pctl.gen_codes[pctl.pl_to_id(i)]):
-				# bg = [255, 255, 255, 15]
-				bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.04, 0)
-				if light_mode:
-					bg = ColourRGBA(0, 0, 0, 16)
+				drop_hit_rect = clipped_to_box(
+					(tab_start + 50 * gui.scale, yy - 1, tab_width - 50 * gui.scale, (self.tab_h + 1))
+				)
 
-			# Get actual bg from blend for text bg
-			real_bg = alpha_blend(bg, self.colours.playlist_box_background)
+				# Highlight if playlist selected (viewing)
+				if i == pctl.active_playlist_viewing or (tauon.tab_menu.active and tauon.tab_menu.reference == i):
+					# bg = [255, 255, 255, 25]
 
-			# Draw highlight
-			self.ddt.rect((tab_start, yy - round(1 * gui.scale), tab_width, self.tab_h), bg)
+					# Adjust highlight for different background brightnesses
+					bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.06, 0)
+					if light_mode:
+						bg = ColourRGBA(0, 0, 0, 25)
+					if self.prefs.transparent_mode:
+						bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.03, 0)
+						bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
 
-			# Draw title text
-			text_start = 10 * gui.scale
-			if draw_pin_indicator:
-				# text_start = 40 * gui.scale
-				text_start = 32 * gui.scale
+				# Highlight target playlist when tragging tracks over
+				if drop_hit_rect is not None and self.coll(drop_hit_rect) and self.inp.quick_drag and not (
+					pctl.gen_codes.get(pctl.pl_to_id(i)) and "self" not in pctl.gen_codes[pctl.pl_to_id(i)]):
+					# bg = [255, 255, 255, 15]
+					bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.04, 0)
+					if light_mode:
+						bg = ColourRGBA(0, 0, 0, 16)
 
-			if not pl.hidden and self.prefs.tabs_on_top:
-				cl = ColourRGBA(255, 255, 255, 25)
+				# Get actual bg from blend for text bg
+				real_bg = alpha_blend(bg, self.colours.playlist_box_background)
 
-				if light_mode:
-					cl = ColourRGBA(0, 0, 0, 40)
+				# Draw highlight
+				self.ddt.rect((tab_start, yy - round(1 * gui.scale), tab_width, self.tab_h), bg)
 
-				xx = tab_start + tab_width - self.lock_icon.w
-				self.lock_icon.render(xx, yy, cl)
+				# Draw title text
+				text_start = 10 * gui.scale
+				if draw_pin_indicator:
+					# text_start = 40 * gui.scale
+					text_start = 32 * gui.scale
 
-			text_max_w = tab_width - text_start - 15 * gui.scale
-			# if indicator_run_x:
-			#     text_max_w = tab_width - (indicator_run_x + text_start + 17 * gui.scale + slide)
-			self.ddt.text(
-				(tab_start + text_start, yy + self.text_offset), name, tab_title_colour if i != pctl.active_playlist_viewing else self.colours.tab_text_active, 211, max_w=text_max_w, bg=real_bg)
+				if not pl.hidden and self.prefs.tabs_on_top:
+					cl = ColourRGBA(255, 255, 255, 25)
 
-			# Is mouse collided with tab?
-			hit = drop_hit_rect is not None and self.coll(drop_hit_rect)
+					if light_mode:
+						cl = ColourRGBA(0, 0, 0, 40)
 
-			# if not self.prefs.tabs_on_top:
-			if i == pctl.active_playlist_playing:
-				indicator_colour = self.colours.title_playing
-				if self.colours.lm:
-					indicator_colour = self.colours.seek_bar_fill
+					xx = tab_start + tab_width - self.lock_icon.w
+					self.lock_icon.render(xx, yy, cl)
 
-				ddt.rect((tab_start + 0 - 2 * gui.scale, yy - round(1 * gui.scale), indicate_w, self.tab_h), indicator_colour)
+				text_max_w = tab_width - text_start - 15 * gui.scale
+				# if indicator_run_x:
+				#     text_max_w = tab_width - (indicator_run_x + text_start + 17 * gui.scale + slide)
+				self.ddt.text(
+					(tab_start + text_start, yy + self.text_offset), name, tab_title_colour if i != pctl.active_playlist_viewing else self.colours.tab_text_active, 211, max_w=text_max_w, bg=real_bg)
 
-			# # If mouse over
-			if hit:
-				# Draw indicator for dragging tracks
-				if (self.inp.quick_drag or gui.ext_drop_mode) and self.tauon.pl_is_mut(i):
-					ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(80, 200, 180, 255))
+				# Is mouse collided with tab?
+				hit = drop_hit_rect is not None and self.coll(drop_hit_rect)
 
-				# Draw indicators for moving tab
-				if self.drag and i != self.drag_on and not point_proximity_test(
-					gui.drag_source_position, self.inp.mouse_position, 10 * gui.scale):
-					if self.inp.key_shift_down:
-						ddt.rect(
-							(tab_start + tab_width - 4 * gui.scale, yy, self.indicate_w, self.tab_h),
-							ColourRGBA(80, 160, 200, 255))
-					elif i < self.drag_on:
-						ddt.rect((tab_start, yy - self.indicate_w, tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
-					else:
-						ddt.rect((tab_start, yy + (self.tab_h - self.indicate_w), tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
+				# if not self.prefs.tabs_on_top:
+				if i == pctl.active_playlist_playing:
+					indicator_colour = self.colours.title_playing
+					if self.colours.lm:
+						indicator_colour = self.colours.seek_bar_fill
 
-			elif self.inp.quick_drag and not point_proximity_test(gui.drag_source_position, self.inp.mouse_position, 15 * gui.scale):
-				for item in gui.shift_selection:
-					if len(pctl.default_playlist) > item and pctl.default_playlist[item] in pl.playlist_ids:
-						ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(190, 170, 20, 255))
-						break
-			# Drag red line highlight if playlist is generator playlist
-			if self.inp.quick_drag and not point_proximity_test(gui.drag_source_position, self.inp.mouse_position, 15 * gui.scale):
-				if not self.tauon.pl_is_mut(i):
-					ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(200, 70, 50, 255))
+					ddt.rect((tab_start + 0 - 2 * gui.scale, yy - round(1 * gui.scale), indicate_w, self.tab_h), indicator_colour)
 
-			# Draw effect of adding tracks to playlist
-			if len(self.adds) > 0:
-				for k in reversed(range(len(self.adds))):
-					if pctl.multi_playlist[i].uuid_int == self.adds[k][0]:
-						if self.adds[k][2].get() > 0.3:
-							del self.adds[k]
-						else:
-							ay = yy + 4 * gui.scale
-							ay -= 6 * gui.scale * self.adds[k][2].get() / 0.3
+				# # If mouse over
+				if hit:
+					# Draw indicator for dragging tracks
+					if (self.inp.quick_drag or gui.ext_drop_mode) and self.tauon.pl_is_mut(i):
+						ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(80, 200, 180, 255))
 
-							ddt.text(
-								(tab_start + tab_width - 10 * gui.scale, round(ay), 1),
-								"+" + str(self.adds[k][1]), self.colours.pulse_colour, 212, bg=real_bg)
-							gui.request_frame()
-
+					# Draw indicators for moving tab
+					if self.drag and i != self.drag_on and not point_proximity_test(
+						gui.drag_source_position, self.inp.mouse_position, 10 * gui.scale):
+						if self.inp.key_shift_down:
 							ddt.rect(
-								(tab_start + tab_width, yy, self.indicate_w, self.tab_h - self.indicate_w),
-								ColourRGBA(244, 212, 66, int(255 * self.adds[k][2].get() / 0.3) * -1))
+								(tab_start + tab_width - 4 * gui.scale, yy, self.indicate_w, self.tab_h),
+								ColourRGBA(80, 160, 200, 255))
+						elif i < self.drag_on:
+							ddt.rect((tab_start, yy - self.indicate_w, tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
+						else:
+							ddt.rect((tab_start, yy + (self.tab_h - self.indicate_w), tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
 
-			yy += self.tab_h + self.gap
+				elif self.inp.quick_drag and not point_proximity_test(gui.drag_source_position, self.inp.mouse_position, 15 * gui.scale):
+					for item in gui.shift_selection:
+						if len(pctl.default_playlist) > item and pctl.default_playlist[item] in pl.playlist_ids:
+							ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(190, 170, 20, 255))
+							break
+				# Drag red line highlight if playlist is generator playlist
+				if self.inp.quick_drag and not point_proximity_test(gui.drag_source_position, self.inp.mouse_position, 15 * gui.scale):
+					if not self.tauon.pl_is_mut(i):
+						ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(200, 70, 50, 255))
+
+				# Draw effect of adding tracks to playlist
+				if len(self.adds) > 0:
+					for k in reversed(range(len(self.adds))):
+						if pctl.multi_playlist[i].uuid_int == self.adds[k][0]:
+							if self.adds[k][2].get() > 0.3:
+								del self.adds[k]
+							else:
+								ay = yy + 4 * gui.scale
+								ay -= 6 * gui.scale * self.adds[k][2].get() / 0.3
+
+								ddt.text(
+									(tab_start + tab_width - 10 * gui.scale, round(ay), 1),
+									"+" + str(self.adds[k][1]), self.colours.pulse_colour, 212, bg=real_bg)
+								gui.request_frame()
+
+								ddt.rect(
+									(tab_start + tab_width, yy, self.indicate_w, self.tab_h - self.indicate_w),
+									ColourRGBA(244, 212, 66, int(255 * self.adds[k][2].get() / 0.3) * -1))
+
+				yy += self.tab_h + self.gap
 
 		if delete_pl is not None:
 			# delete_playlist(delete_pl)
