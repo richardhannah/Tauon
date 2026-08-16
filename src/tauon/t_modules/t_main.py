@@ -51744,7 +51744,11 @@ def main(holder: Holder) -> None:
 			prefs.view_prefs = save[18]
 			# window_size = save[19]
 			gui.save_size = copy.copy(save[19])
-			gui.rspw = save[20]
+			# save[20] is a retired slot ("old side panel size"), always written as
+			# None. Reading it into gui.rspw nulled the live value on every load;
+			# it only ever worked because the guarded save[72] read below put a
+			# real number back. With nothing stored at 72 the None survived into
+			# update_layout_do and crashed on `gui.rspw < 30 * gui.scale`.
 			# savetime = save[21]
 			gui.vis_want = save[22]
 			bag.selected_in_playlist = save[23]
