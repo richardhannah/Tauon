@@ -227,7 +227,9 @@ should absorb.
 **Phase 1 — a control helper.** One function bundling rect, `coll`, hover
 colour, click dispatch, `fields.add` and tooltip. This pattern is written out by
 hand roughly 150 times, and each repetition is an opportunity for R3 to be
-violated. Mechanical and individually verifiable.
+violated. Mechanical and individually verifiable — and now checkable against the
+hit-rect overlay described under Verification, which is what makes "the helper
+registered both" something you can see rather than assume.
 
 **Phase 2 — layout primitives.** Row, column, padding, spacer, alignment,
 returning rects. Applied only to panels being edited anyway. This is what
@@ -255,11 +257,25 @@ side-panel work, and which should be repeated for layout changes:
 4. Confirm every interactive element is clickable where it appears, and *not*
    clickable where it does not.
 
-Check 4 is the weakest, because hit rects are invisible. **A debug overlay that
-strokes every rect in `Fields.field_array` for the current frame would make this
-checkable at a glance**, and would have caught the overhanging transport hit
-rects immediately. It is a few lines against an array the app already builds
-every frame, and it is recommended as a prerequisite for any layout work.
+Check 4 used to be the weakest, because hit rects are invisible. There is now an
+overlay for it: **Settings → Advanced → Editing and diagnostics → "Show hit
+rectangles"**. It strokes, over the finished frame:
+
+- every hover field in `Fields.field_array` (blue),
+- every rect passed to `coll()` this frame (green),
+- anything under the pointer (red), which answers "what would this click hit",
+- a count of each in the corner.
+
+Hit rects are recorded inside `coll()` itself, so all 300-odd call sites are
+covered without touching any of them, and they are translated by
+`inp.view_offset` exactly as `Fields.add()` does — an offscreen widget is drawn
+where it is actually clickable, so a reframing bug shows up as an offset outline
+rather than staying invisible (R5).
+
+Drawing the two registrations in two colours is the point: they are kept in sync
+by hand, so when a control moves and only one of them follows, the outlines come
+apart on screen. That is the R3 failure mode, made visible. The flag is runtime
+only and resets on restart.
 
 ## Open questions
 

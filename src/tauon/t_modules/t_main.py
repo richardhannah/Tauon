@@ -863,6 +863,10 @@ class GuiVar:
 		self.rename_folder_box: bool = False
 
 		self.present: bool = False
+		# Hit-rect debug overlay (see Tauon.draw_hit_overlay). Runtime only: it
+		# is a development aid, so it is deliberately not persisted to prefs.
+		self.debug_hit_overlay: bool = False
+		self.debug_hit_rects: set[tuple[int, int, int, int]] = set()
 		self.drag_source_position = (0, 0)
 		self.drag_source_position_persist = (0, 0)
 		#self.old_album_pos: int = -55
@@ -7273,7 +7277,67 @@ class Tauon:
 			self.sdl_tray_text = text
 
 	def coll(self, r: list[int]) -> bool:
+		if self.gui.debug_hit_overlay:
+			# Every hit test in the app funnels through here, including the
+			# bound copies classes take as self.coll, so recording at this one
+			# point catches all 300-odd call sites without touching any of them.
+			# Rects are moved into screen space the same way Fields.add does it,
+			# so a widget rendering offscreen is drawn where it is clickable.
+			ox, oy = self.inp.view_offset
+			self.gui.debug_hit_rects.add((round(r[0] + ox), round(r[1] + oy), round(r[2]), round(r[3])))
 		return r[0] < self.inp.mouse_position[0] <= r[0] + r[2] and r[1] <= self.inp.mouse_position[1] <= r[1] + r[3]
+
+	def draw_hit_overlay(self) -> None:
+		"""Stroke every hover field and hit rect registered this frame.
+
+		Hit rects are invisible, which is how they drift away from the thing
+		they belong to (docs/layout-manager.md, R3). Hit-testing and hover
+		invalidation are two separate registrations kept in sync by hand, so
+		they are stroked in two colours: if a control moved and only one of the
+		two followed, the outlines come apart. A rect under the pointer is
+		stroked in red, which answers "what would this click actually hit".
+
+		Drawn straight onto the window at the end of the frame, so it sits over
+		everything and cannot be scrolled or clipped away. Colours are fixed
+		rather than themed - this is a development aid, not part of the UI."""
+		ddt = self.ddt
+		gui = self.gui
+		th = max(1, round(gui.scale))
+		mx, my = self.inp.mouse_position
+
+		field_colour = ColourRGBA(80, 140, 255, 150)
+		hit_colour = ColourRGBA(70, 220, 130, 150)
+		hot_colour = ColourRGBA(255, 60, 60, 255)
+
+		# Snapshot: self.coll() is not used below, since testing a rect here
+		# would record it back into the set being iterated.
+		hits = tuple(gui.debug_hit_rects)
+		hot = 0
+
+		for field in self.fields.field_array:
+			ddt.rect_si(field[0], field_colour, th)
+
+		for rect in hits:
+			if rect[0] < mx <= rect[0] + rect[2] and rect[1] <= my <= rect[1] + rect[3]:
+				hot += 1
+				ddt.rect_si(rect, hot_colour, th)
+			else:
+				ddt.rect_si(rect, hit_colour, th)
+
+		box = (
+			round(gui.scale * 8),
+			round(self.window_size[1] - gui.scale * 30),
+			round(gui.scale * 210),
+			round(gui.scale * 22),
+		)
+		ddt.rect(box, ColourRGBA(0, 0, 0, 245))
+		ddt.text(
+			(box[0] + round(6 * gui.scale), box[1] + round(4 * gui.scale)),
+			f"hit {len(hits)}  fields {len(self.fields.field_array)}  under {hot}",
+			ColourRGBA(150, 150, 150, 255),
+			311,
+			bg=ColourRGBA(5, 5, 5, 255),
+		)
 
 	def draw_ab_repeat_markers(self, seek_x: float, seek_y: float, seek_w: float, seek_h: float) -> None:
 		if self.pctl.playing_length <= 0 or seek_w <= 0:
@@ -29376,6 +29440,14 @@ class Over:
 				tauon.console.fps_only = False
 				if console_show:
 					tauon.console.fps.reset()
+
+			y += small_row_h + row_gap
+			gui.debug_hit_overlay = self.settings_switch_row(
+				(x, y, w, small_row_h),
+				gui.debug_hit_overlay,
+				_("Show hit rectangles"),
+				accent=accent,
+			)
 
 	def button(self, x: int, y: int, text: str, plug: Callable[[], None] | None = None, width: int = 0, bg: ColourRGBA | None = None) -> bool:
 		"""PSA for anyone making a new button function: use fields.add(rect) to make the gui
@@ -57438,6 +57510,7 @@ def main(holder: Holder) -> None:
 					tauon.thread_manager.ready("style")
 
 			tauon.fields.clear()
+			gui.debug_hit_rects.clear()
 			gui.cursor_want = 0
 
 			gui.layer_focus = 0
@@ -60295,6 +60368,8 @@ def main(holder: Holder) -> None:
 
 		if gui.present:
 			sdl3.SDL_SetRenderTarget(renderer, None)
+			if gui.debug_hit_overlay:
+				tauon.draw_hit_overlay()
 			tauon.render_rounded_corners()
 			sdl3.SDL_RenderPresent(renderer)
 
