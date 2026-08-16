@@ -231,6 +231,38 @@ Colours come from `.ttheme` files parsed in `t_themeload.py` into
 files must not encode geometry. Keeping these orthogonal is what let the Ember
 theme change the entire look without touching a layout call site.
 
+### R10. Fixed controls are anchored, not cursor-placed — **partly done**
+
+A control with a fixed home — the menu button, the corner buttons — must be
+positioned from an edge of its panel, not from a running `x` that variable-width
+content has already advanced. Otherwise its position is a function of content it
+has nothing to do with, and it moves for reasons the user cannot connect to it.
+
+The header bar's MENU button was the case. It was drawn at whatever `x` the
+playlist tab strip left behind, so every playlist added slid it further right,
+and the empty region that opens the window menu (`tabs_right_x < mouse_x`) shrank
+with it — the control that turns the tabs *off* retreated as the tabs grew. The
+fix was ordering, not arithmetic: MENU is placed immediately after the corner
+buttons and the tab strip starts at `menu_rect.right`, so the anchored control
+comes first and only the variable-width content moves.
+
+Two things that fall out of it, both worth checking when a control is re-anchored:
+
+- **A reservation moves with the thing it was reserving for.** The tab budget
+  kept `180 * scale` clear at the right for "MENU plus the status text". With
+  MENU anchored at the left that width was counted at both ends, silently
+  costing the tab strip one tab, so the menu's footprint now comes off the
+  reservation.
+- **Derived state must be reset, not just assigned.** `tabs_right_x` was only
+  written while tabs were being drawn, so with the strip hidden it kept the last
+  edge it had — leaving a dead band in the bar where right-click did nothing. It
+  is now reset each frame from the strip's own start.
+
+Not everything should be anchored. The status text and the download indicator
+genuinely follow the tabs, and the window-drag zone (`drag_zone_start_x`) has to
+begin after everything interactive, so those stay derived from the end of the
+run. The requirement is about controls with a fixed home, not about all content.
+
 ## Suggested phasing
 
 Ordered cheapest-first, each phase independently useful and shippable.
@@ -271,10 +303,12 @@ menu is open) skip the `tooltip=` argument and call the tooltip themselves,
 gated on `c.hover`.
 
 Migrated so far: the five transport buttons in `BottomBarType1` — the cluster
-whose hit rects drifted, so the R3 case is now expressed in the API — and the
-two `display_*_heart` hover rows, which exercise the `field_callback` path. The
-remaining ~140 sites should be converted when they are being edited anyway, not
-in a sweep.
+whose hit rects drifted, so the R3 case is now expressed in the API — the two
+`display_*_heart` hover rows, which exercise the `field_callback` path, and the
+header bar's MENU button, converted while it was being re-anchored (R10) so its
+`Rect` feeds the draw, the hover colour and the hit test alike. The remaining
+~140 sites should be converted when they are being edited anyway, not in a
+sweep.
 
 **Phase 2 — layout primitives. Started.** `t_layout.py` holds `Rect`, `Column`
 and `ControlRow`. They compute rects and nothing else: no drawing, no colour, no

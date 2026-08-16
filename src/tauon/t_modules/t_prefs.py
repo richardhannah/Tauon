@@ -184,7 +184,11 @@ class Prefs:
 	gallery_single_click: bool = True
 	custom_bg_opacity = 40
 
-	tabs_on_top: bool = True
+	# Playlist tabs in the header bar. Off by default: the side panel is shown
+	# on first run and already lists the playlists, so the tab strip duplicates
+	# it while consuming the header bar. Toggle via Show Tabs in the window menu
+	# (right-click the empty header bar).
+	tabs_on_top: bool = False
 
 	showcase_vis: bool = True
 	spectrogram_colour: int = 0  # preset index (t_custom.SPECTRO_PRESETS)

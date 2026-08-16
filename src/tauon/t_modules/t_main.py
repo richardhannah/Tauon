@@ -933,6 +933,26 @@ class GuiVar:
 		self.lsp: bool = not self.bag.phone
 		self.lspw: float = round(220 * self.scale)
 		self.lsp_x: float = 0
+		# User-chosen width for the playlist side panel, set by dragging its right
+		# edge and persisted. 0 means "never dragged" - the panel then keeps the
+		# window-derived width in update_layout_do. Stored unscaled so a saved
+		# width survives a change of ui_scale or a move to a different monitor.
+		self.lspw_user: float = 0
+		self.lsp_drag: bool = False
+		self.lsp_drag_source: float = 0
+		self.lsp_drag_original: float = 0
+		# The bounds a dragged side panel width is held to, unscaled. Both the
+		# drag itself and the layout pass clamp against these, so they live here
+		# rather than as a literal at each site (R4).
+		self.lspw_min: float = 120
+		self.tracklist_min_w: float = 300
+
+		# uuid_int of a playlist to bring into view. Playlist files are unpacked
+		# into a new playlist on the loader thread, which must not call
+		# switch_playlist itself - that reloads and re-renders the tracklist, and
+		# can re-enter loading. The main loop picks this up instead, once the
+		# playlist exists.
+		self.switch_to_playlist_uuid: int | None = None
 		self.plw: float | None = None
 		self.rsp_on_left: bool = False
 		self.rsp_x: float = 0
@@ -8305,8 +8325,14 @@ class Tauon:
 		logging.info(f"playlist imported with {found_imported} tracks already in library, {found_file} found from filepath, {found_title} from title and {not_found} not found")
 		return playlist, stations
 
-	def load_m3u(self, m3u_path: str) -> None:
-		"""Import an m3u file and create a new Tauon playlist for it"""
+	def load_m3u(self, m3u_path: str, reveal: bool = False) -> None:
+		"""Import an m3u file and create a new Tauon playlist for it
+
+		`reveal` brings the new playlist into view, for when the user dropped or
+		opened this file and is waiting to see something happen. Off for imports
+		that come out of a folder scan, which would otherwise yank the view
+		around once per playlist file found.
+		"""
 		path = Path(m3u_path)
 		name = path.stem
 		if not path.is_file():
@@ -8321,6 +8347,8 @@ class Tauon:
 			logging.info(f"Imported m3u file as {final_playlist.title}")
 			self.pctl.multi_playlist.append(
 				final_playlist)
+			if reveal:
+				self.gui.switch_to_playlist_uuid = final_playlist.uuid_int
 		if stations:
 			self.add_stations(stations, name)
 		if not playlist and not stations:
@@ -8579,8 +8607,10 @@ class Tauon:
 		return playlist, stations, name
 
 
-	def load_xspf(self, xspf_path: str) -> None:
+	def load_xspf(self, xspf_path: str, reveal: bool = False) -> None:
 		# self.log("Importing XSPF playlist: " + path, title=True)
+		# `reveal` as in load_m3u: bring the result into view for a file the user
+		# dropped or opened, but not for one turned up by a folder scan.
 
 		if not Path(xspf_path).is_file():
 			return
@@ -8597,6 +8627,8 @@ class Tauon:
 			logging.info(f"Imported xspf file as {final_playlist.title}")
 			self.pctl.multi_playlist.append(
 				final_playlist)
+			if reveal:
+				self.gui.switch_to_playlist_uuid = final_playlist.uuid_int
 		if stations:
 			self.add_stations(stations, name)
 		if not stations and not playlist:
@@ -14758,6 +14790,19 @@ class Tauon:
 			if max_insets > 1:
 				gui.lspw = max(gui.lspw, 260 * gui.scale + round(15 * gui.scale) * max_insets)
 
+		# A dragged width replaces the derived one, but stays subject to the same
+		# space pressure the derivation answers to: the tracklist keeps a usable
+		# minimum, so narrowing the window walks the panel back in rather than
+		# letting the two overlap (R7). Below that floor there is no width that
+		# satisfies both, so the derived auto-shrink above stands. The compact
+		# artist list is a distinct 75px layout rather than a width preference,
+		# so a dragged width does not apply to it.
+		if gui.lsp and gui.lspw_user and not gui.compact_artist_list:
+			min_lspw = round(gui.lspw_min * gui.scale)
+			max_lspw = round(pl_width_a - gui.tracklist_min_w * gui.scale)
+			if max_lspw >= min_lspw:
+				gui.lspw = min(max(round(gui.lspw_user * gui.scale), min_lspw), max_lspw)
+
 		# -----
 
 		# Set bg art strength according to setting ----
@@ -19646,6 +19691,7 @@ class Tauon:
 			prefs.milk_favorite_presets,  # 194
 			prefs.art_bg_frosted,  # 195
 			prefs.replay_allow_compression,  # 196
+			gui.lspw_user,  # 197
 		]
 
 		try:
@@ -20694,6 +20740,15 @@ class Tauon:
 		return None
 
 
+	def makes_own_playlist(self, target: str) -> bool:
+		"""Whether importing this file creates a playlist of its own.
+
+		Playlist files are unpacked by add_file into a new playlist named after
+		the file, so a drop must not also spawn an empty one to receive them -
+		the load order for these carries no tracks and the spare is left behind.
+		"""
+		return target.lower().endswith((".xspf", ".m3u", ".m3u8", ".pls"))
+
 	def drop_file(self, target: str) -> None:
 		"""Deprecated, move to individual UI components"""
 		i_x = self.inp.mouse_position[0]
@@ -20701,7 +20756,15 @@ class Tauon:
 		self.gui.drop_playlist_target = 0
 		#logging.info(event.drop)
 
-		if i_y < self.gui.panelY and not self.gui.new_playlist_cooldown and self.gui.mode == GuiMode.MAIN:
+		# Dropping on empty header space means "put this in a new playlist", but
+		# only where the header is showing tabs. With the strip hidden the whole
+		# bar is empty space, so every drop up there would silently make one.
+		if (
+			i_y < self.gui.panelY
+			and self.top_panel.tab_strip_shown
+			and not self.gui.new_playlist_cooldown
+			and self.gui.mode == GuiMode.MAIN
+		):
 			x = self.top_panel.tabs_left_x
 			for tab in self.top_panel.shown_tabs:
 				wid = self.top_panel.tab_text_spaces[tab] + self.top_panel.tab_extra_width
@@ -20720,7 +20783,7 @@ class Tauon:
 				if self.gui.new_playlist_cooldown:
 					self.gui.drop_playlist_target = self.pctl.active_playlist_viewing
 				else:
-					if not target.lower().endswith(".xspf"):
+					if not self.makes_own_playlist(target):
 						self.gui.drop_playlist_target = self.new_playlist()
 					self.gui.new_playlist_cooldown = True
 		elif self.gui.lsp and self.gui.panelY < i_y < self.window_size[1] - self.gui.panelBY and self.gui.lsp_x < i_x < self.gui.lsp_x + self.gui.lspw and self.gui.mode == GuiMode.MAIN:
@@ -20741,7 +20804,7 @@ class Tauon:
 				if self.gui.new_playlist_cooldown:
 					self.gui.drop_playlist_target = self.pctl.active_playlist_viewing
 				else:
-					if not target.lower().endswith(".xspf"):
+					if not self.makes_own_playlist(target):
 						self.gui.drop_playlist_target = self.new_playlist()
 					self.gui.new_playlist_cooldown = True
 		else:
@@ -32758,7 +32821,8 @@ class TopPanel:
 		self.tab_text_y_offset = 7 * self.gui.scale
 		self.tab_spacing = 0
 
-		self.ini_menu_space = 17 * self.gui.scale  # 17
+		# Gap either side of the menu button: between it and the tab strip, and
+		# between the tab strip and the status text that follows it.
 		self.menu_space = 17 * self.gui.scale
 		self.click_buffer = 4 * self.gui.scale
 
@@ -32768,6 +32832,10 @@ class TopPanel:
 		self.prime_tab = self.gui.saved_prime_tab
 		self.prime_side = self.gui.saved_prime_direction  # 0=left, 1=right
 		self.shown_tabs = []
+		# Whether the last frame drew a tab strip at all. Drop handling asks the
+		# panel rather than re-deriving the condition, so the two cannot disagree
+		# about whether the header is a playlist-targeting surface.
+		self.tab_strip_shown: bool = False
 
 		# ---
 		self.space_left = 0
@@ -32983,9 +33051,46 @@ class TopPanel:
 		x = self.start_space_left + wwx
 		if not prefs.shuffle_lock and not gui.custom_mode:
 			# The corner holds two buttons (layout/edit menu, then the panel
-			# button); start the tab strip after the second slot.
+			# button); the menu button follows the second slot.
 			x += round(35 * gui.scale)
 		y = yy  # self.ty
+
+		# MENU -----------------------------
+		# Anchored, and drawn before the tab strip deliberately. It used to be
+		# placed by the running x the tabs left behind, so every playlist added
+		# moved it, and the empty area that opens the window menu (and with it
+		# Show Tabs) shrank as the tabs grew. The tab strip now starts at its
+		# right edge instead, so only the tabs move
+		# (docs/layout-manager.md, R10).
+		menu_word = _("MENU")
+		menu_rect = Rect(
+			x - self.click_buffer, yy + self.ty + 1,
+			ddt.get_text_w(menu_word, 212) + self.click_buffer * 2, self.height - 1)
+		menu_button = tauon.control(menu_rect)
+
+		if (tauon.x_menu.active or menu_button.hover) and not tauon.tab_menu.active:
+			bg = colours.status_text_over
+		else:
+			bg = colours.status_text_normal
+		bg = tauon.style_overlay.tint_from_background(
+			bg, x, yy + 15 * gui.scale, 0.2, colours.top_panel_background)
+		ddt.text_background_colour = colours.top_panel_background
+		ddt.text((x, yy + 7 * gui.scale), menu_word, bg, 212)
+
+		if menu_button.click:
+			if tauon.x_menu.active:
+				tauon.x_menu.active = False
+			elif not tauon.x_menu.click_dismissed:
+				# click_dismissed: this same click already closed the menu's
+				# popup window (event loop) — don't instantly reopen it.
+				xx = x
+				if x > window_size[0] - (210 * gui.scale):
+					xx = window_size[0] - round(210 * gui.scale)
+				# View Switcher no longer pops out here (layouts live in the
+				# corner layout menu now); menu sits 7px further left.
+				tauon.x_menu.activate(position=(xx + round(5 * gui.scale), gui.panelY))
+
+		x = menu_rect.right + self.menu_space
 
 		# Calculate position for playing text and text
 		offset = 15 * gui.scale
@@ -33000,10 +33105,22 @@ class TopPanel:
 		if gui.top_bar_mode2:
 			offset = 0
 
-		p_text_len = 180 * gui.scale
+		# Space kept clear at the right for the download indicator and the status
+		# text, which follow the tab strip. The menu button used to sit in here
+		# too, so its footprint comes off the reservation now that it is anchored
+		# at the left - otherwise it would be counted at both ends and the tab
+		# strip would quietly lose that width.
+		p_text_len = max(0, 180 * gui.scale - (menu_rect.w + self.menu_space))
 		right_space_es = p_text_len + offset
 
 		x_start = x
+		# Where the empty (window-menu) part of the bar begins. Reset every
+		# frame from the strip's own start so it does not keep a stale right
+		# edge from the last time tabs were shown.
+		self.tabs_right_x = x_start
+		self.shown_tabs = []
+		left_overflow: list[int] = []
+		right_overflow: list[int] = []
 
 		if tauon.playlist_box.drag and not gui.radio_view:
 			if self.inp.mouse_up:
@@ -33024,7 +33141,12 @@ class TopPanel:
 		ready_tabs: list[int] = []
 		show_tabs: list[int] = []
 
-		if prefs.tabs_on_top or gui.radio_view:
+		# Radio view always shows its station-playlist tabs, whatever the
+		# playlist tab setting says.
+		show_tab_strip = prefs.tabs_on_top or gui.radio_view
+		self.tab_strip_shown = show_tab_strip
+
+		if show_tab_strip:
 			if gui.radio_view:
 				for i, tab in enumerate(pctl.radio_playlists):
 					ready_tabs.append(i)
@@ -33458,7 +33580,7 @@ class TopPanel:
 				else:
 					ddt.rect((x, y, 2 * gui.scale, gui.panelY2), ColourRGBA(80, 160, 200, 255))
 
-		if prefs.tabs_on_top and right_overflow:
+		if show_tab_strip and right_overflow:
 			x += 24 * gui.scale
 			self.tabs_right_x += 24 * gui.scale
 
@@ -33491,40 +33613,12 @@ class TopPanel:
 					tauon.toast_mode_timer.force_set(10)
 					gui.mode_toast_text = ""
 		# ---------
-		# Menu Bar
+		# Status area. The download indicator and the status text genuinely
+		# follow the tab strip, so unlike the menu button they stay
+		# cursor-placed and start wherever the tabs ended.
 
-		x += self.ini_menu_space
 		y += 7 * gui.scale
 		ddt.text_background_colour = colours.top_panel_background
-
-		# MENU -----------------------------
-
-		word = _("MENU")
-		word_length = ddt.get_text_w(word, 212)
-		rect = [x - self.click_buffer, yy + self.ty + 1, word_length + self.click_buffer * 2, self.height - 1]
-		hit = self.coll(rect)
-		self.fields.add(rect)
-
-		if (tauon.x_menu.active or hit) and not tauon.tab_menu.active:
-			bg = colours.status_text_over
-		else:
-			bg = colours.status_text_normal
-		bg = tauon.style_overlay.tint_from_background(
-			bg, x, y + 8 * gui.scale, 0.2, colours.top_panel_background)
-		ddt.text((x, y), word, bg, 212)
-
-		if hit and inp.mouse_click:
-			if tauon.x_menu.active:
-				tauon.x_menu.active = False
-			elif not tauon.x_menu.click_dismissed:
-				# click_dismissed: this same click already closed the menu's
-				# popup window (event loop) — don't instantly reopen it.
-				xx = x
-				if x > window_size[0] - (210 * gui.scale):
-					xx = window_size[0] - round(210 * gui.scale)
-				# View Switcher no longer pops out here (layouts live in the
-				# corner layout menu now); menu sits 7px further left.
-				tauon.x_menu.activate(position=(xx + round(5 * gui.scale), gui.panelY))
 
 		# if True:
 		#     border = round(3 * gui.scale)
@@ -33602,8 +33696,10 @@ class TopPanel:
 				# ColourRGBA(166, 244, 179, 255)
 
 		# LAYOUT --------------------------------
-		x += self.menu_space + word_length
+		x += self.menu_space
 
+		# The window-drag zone starts after everything interactive in the bar,
+		# so this one stays derived from the end of the run.
 		self.drag_zone_start_x = x - 5 * gui.scale
 		status = True
 
@@ -34154,8 +34250,12 @@ class BottomBarType1:
 				if inp.right_click:
 					pctl.toggle_mute()
 
-			for bar in range(8):
-				h = min_h + bar * step
+			# `seg`, not `bar` - the panel's own rect is bound to `bar` at the top of
+			# render() and everything below here still needs it. As a loop variable
+			# it leaked the last index out of the loop and the next `bar.right` read
+			# died on an int, so the whole bottom panel crashed under 670px wide.
+			for seg in range(8):
+				h = min_h + seg * step
 				rect = (x, y - h, 3 * gui.scale, h)
 				h_rect = (x - 1 * gui.scale, y - 17 * gui.scale, 4 * gui.scale, 23 * gui.scale)
 
@@ -34163,42 +34263,42 @@ class BottomBarType1:
 					if self.inp.mouse_down or self.inp.mouse_up:
 						gui.update_on_drag = True
 
-						if bar == 0:
+						if seg == 0:
 							pctl.player_volume = 5
-						if bar == 1:
+						if seg == 1:
 							pctl.player_volume = 10
-						if bar == 2:
+						if seg == 2:
 							pctl.player_volume = 20
-						if bar == 3:
+						if seg == 3:
 							pctl.player_volume = 30
-						if bar == 4:
+						if seg == 4:
 							pctl.player_volume = 45
-						if bar == 5:
+						if seg == 5:
 							pctl.player_volume = 55
-						if bar == 6:
+						if seg == 6:
 							pctl.player_volume = 70
-						if bar == 7:
+						if seg == 7:
 							pctl.player_volume = 100
 
 						pctl.set_volume()
 
 				colour = md_off
 
-				if bar == 0 and pctl.player_volume > 0:
+				if seg == 0 and pctl.player_volume > 0:
 					colour = md_active
-				elif bar == 1 and pctl.player_volume >= 10:
+				elif seg == 1 and pctl.player_volume >= 10:
 					colour = md_active
-				elif bar == 2 and pctl.player_volume >= 20:
+				elif seg == 2 and pctl.player_volume >= 20:
 					colour = md_active
-				elif bar == 3 and pctl.player_volume >= 30:
+				elif seg == 3 and pctl.player_volume >= 30:
 					colour = md_active
-				elif bar == 4 and pctl.player_volume >= 45:
+				elif seg == 4 and pctl.player_volume >= 45:
 					colour = md_active
-				elif bar == 5 and pctl.player_volume >= 55:
+				elif seg == 5 and pctl.player_volume >= 55:
 					colour = md_active
-				elif bar == 6 and pctl.player_volume >= 70:
+				elif seg == 6 and pctl.player_volume >= 70:
 					colour = md_active
-				elif bar == 7 and pctl.player_volume >= 95:
+				elif seg == 7 and pctl.player_volume >= 95:
 					colour = md_active
 
 				ddt.rect(rect, colour)
@@ -50143,8 +50243,14 @@ def worker1(tauon: Tauon) -> None:
 					add_file(filepath[0])
 					logging.info(f"will import {filepath[0]}")
 
-	def add_file(path: str, force_scan: bool = False, show_errors: bool = False) -> int | None:
-		"""Import file from path - playlists, audio, zips etc"""
+	def add_file(path: str, force_scan: bool = False, show_errors: bool = False, reveal: bool = False) -> int | None:
+		"""Import file from path - playlists, audio, zips etc
+
+		`reveal` marks a file the user pointed at directly - dropped on the window
+		or opened - as opposed to one turned up by a folder walk or the playlist
+		folder autoscan. Only a playlist file uses it, to bring the playlist it
+		creates into view.
+		"""
 		try:
 			Path(path).stat().st_size
 		except FileNotFoundError:
@@ -50192,7 +50298,7 @@ def worker1(tauon: Tauon) -> None:
 
 		if path.lower().endswith(".xspf"):
 			logging.info(f"Found XSPF file at: {path}")
-			tauon.load_xspf(path)
+			tauon.load_xspf(path, reveal=reveal)
 			return 0
 
 		if path.lower().endswith(".milk"):
@@ -50200,7 +50306,7 @@ def worker1(tauon: Tauon) -> None:
 				tauon.milky.projectm.load_next = Path(path)
 
 		if path.lower().endswith(".m3u") or path.lower().endswith(".m3u8"):
-			tauon.load_m3u(path)
+			tauon.load_m3u(path, reveal=reveal)
 			return 0
 
 		if path.endswith(".pls"):
@@ -50868,7 +50974,7 @@ def worker1(tauon: Tauon) -> None:
 							gets(order.target)
 					elif tauon.loaderCommand == LoaderCommand.FILE:
 						loaded_paths_cache, loaded_cue_cache = cache_paths()
-						add_file(order.target, show_errors=True)
+						add_file(order.target, show_errors=True, reveal=True)
 						# i think this meaans if it's manually dragged in
 
 					if gui.im_cancel:
@@ -52121,6 +52227,8 @@ def main(holder: Holder) -> None:
 				prefs.art_bg_frosted = save[195]
 			if len(save) > 196 and save[196] is not None:
 				prefs.replay_allow_compression = save[196]
+			if len(save) > 197 and save[197] is not None:
+				gui.lspw_user = save[197]
 
 			del save
 			break
@@ -57430,6 +57538,18 @@ def main(holder: Holder) -> None:
 
 			inp.media_key = ""
 
+		# A dropped or opened playlist file builds its own playlist over on the
+		# loader thread. Bringing it into view has to happen here on the main
+		# thread, and only now that the playlist is actually in multi_playlist.
+		if gui.switch_to_playlist_uuid is not None:
+			switch_uuid = gui.switch_to_playlist_uuid
+			gui.switch_to_playlist_uuid = None
+			for i, playlist in enumerate(pctl.multi_playlist):
+				if playlist.uuid_int == switch_uuid:
+					pctl.switch_playlist(i)
+					gui.request_frame()
+					break
+
 		if len(tauon.load_orders) > 0:
 			pctl.loading_in_progress = True
 			pctl.after_import_flag = True
@@ -57842,6 +57962,63 @@ def main(holder: Holder) -> None:
 					else:
 						gui.pref_gallery_w = target
 
+					tauon.update_layout_do()
+
+				# Playlist Side Panel Draging ----------
+				# The right panel above stores its width per view mode; this one has
+				# a single width because the panel is the same list in every mode.
+
+				if not inp.mouse_down:
+					gui.lsp_drag = False
+
+				if gui.lsp and not gui.custom_mode and gui.mode == GuiMode.MAIN:
+					# Straddles the edge the panel is actually drawn to, so the grab
+					# strip cannot drift away from the boundary it moves (R3).
+					lsp_edge = gui.lsp_x + gui.lspw
+					lsp_drag_rect = (
+						lsp_edge - 5 * gui.scale,
+						gui.panelY,
+						10 * gui.scale,
+						window_size[1] - gui.panelY - gui.panelBY,
+					)
+					tauon.fields.add(lsp_drag_rect)
+
+					# With the tracklist scrollbar on the left it sits on this same
+					# edge, and it was here first - let it win the overlap. The right
+					# panel drag likewise takes precedence once it has the mouse.
+					if (
+						(tauon.coll(lsp_drag_rect) or gui.lsp_drag)
+						and not gui.side_drag
+						and not scroll_bar_blocks_side_drag
+						and not gui.message_box
+						and gui.layer_focus == 0
+						and tauon.is_level_zero()
+					):
+						if gui.lsp_drag:
+							gui.update_on_drag = True
+
+						if inp.mouse_click:
+							gui.lsp_drag = True
+							gui.lsp_drag_source = inp.mouse_position[0]
+							gui.lsp_drag_original = gui.lspw
+
+						if not inp.quick_drag:
+							gui.cursor_want = 1
+
+				if gui.lsp_drag:
+					target = gui.lsp_drag_original + (inp.mouse_position[0] - gui.lsp_drag_source)
+
+					# Clamped here as well as in update_layout_do so the stored width
+					# is a value the layout can honour - otherwise dragging past the
+					# limit would bank an ever-growing number that springs open when
+					# the window is next widened.
+					space = window_size[0] - (gui.rspw if gui.rsp else 0)
+					target = min(
+						max(target, gui.lspw_min * gui.scale),
+						max(space - gui.tracklist_min_w * gui.scale, gui.lspw_min * gui.scale))
+
+					# Stored unscaled; update_layout_do scales it back up.
+					gui.lspw_user = target / gui.scale
 					tauon.update_layout_do()
 
 				# ALBUM GALLERY RENDERING:
