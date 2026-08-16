@@ -951,7 +951,12 @@ class GuiVar:
 
 		self.gallery_positions: dict[int, float] = {}
 
-		self.remember_library_mode: bool = False
+		# Column view on by default: the track list is a single flowing line
+		# otherwise, which on a wide window leaves the duration pinned to the far
+		# right edge, a screen's width from the title it belongs to. A saved value
+		# from t_db (save[87]) overrides this, so anyone who turned columns off
+		# keeps them off.
+		self.remember_library_mode: bool = True
 
 		self.first_in_grid = None
 
@@ -51419,7 +51424,7 @@ def main(holder: Holder) -> None:
 
 	# Library and loader Variables--------------------------------------------------------
 	db_version: float = 0.0
-	latest_db_version: float = 79
+	latest_db_version: float = 80
 
 	rename_files_previous = ""
 	rename_folder_previous = ""
@@ -53930,8 +53935,10 @@ def main(holder: Holder) -> None:
 	if gui.restart_album_mode:
 		tauon.toggle_album_mode(force_on=True)
 
-	if gui.remember_library_mode:
-		tauon.toggle_library_mode()
+	# Assigned rather than toggled: toggling composes the shipped default with the
+	# saved value, so flipping the default would invert everyone's stored choice.
+	gui.set_mode = gui.remember_library_mode
+	gui.update_layout = True
 
 	if prefs.reload_play_state and prefs.reload_state and prefs.reload_state[0] == PlayingState.PLAYING:
 		pctl.jump_time = prefs.reload_state[1]

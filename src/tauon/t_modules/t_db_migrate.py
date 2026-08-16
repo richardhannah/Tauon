@@ -284,4 +284,20 @@ def database_migrate(
 					if field is not None:
 						setattr(track, field, mv)
 
+	if db_version <= 79:  # noqa: PLR2004
+		logging.info("Updating database to version 80")
+		# Column view is now on by default. The stored flag cannot tell
+		# "the user turned columns off" apart from "the default was off when this
+		# state was written", and every pre-80 save has it off for the second
+		# reason - so respecting the stored value would make the new default a
+		# no-op on every existing install. Turn it on once here; a toggle after
+		# this is saved as normal and sticks.
+		#
+		# Both flags are set: state.p is written immediately after migrating (see
+		# the save_state call at the migrate call site), and what it persists is
+		# live gui.set_mode - not this remember flag - so setting only the flag
+		# would be overwritten by that save before it ever took effect.
+		gui.remember_library_mode = True
+		gui.set_mode = True
+
 	return master_library, multi_playlist, p_force_queue, theme, prefs, gui, gen_codes, radio_playlists
