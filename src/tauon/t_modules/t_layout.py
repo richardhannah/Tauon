@@ -28,6 +28,130 @@ rectangles; the caller draws.
 #     along with Tauon Music Box.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
+from typing import NamedTuple
+
+
+class Rect(NamedTuple):
+	"""An (x, y, w, h) rectangle that is still an ordinary tuple.
+
+	Subclassing tuple is the whole point: every existing call site reads rects
+	positionally - `ddt.rect(r, colour)`, `coll(r)`, `fields.add(r)` all index
+	r[0..3] - so a Rect can be handed to any of them unchanged, while new code
+	reads and writes it by name. Migration is therefore per-expression, not
+	per-call-site.
+
+	Every method returns a new Rect; nothing mutates. Deriving one rect from
+	another is how a panel stops re-typing coordinates: the derived rect carries
+	no scale literal of its own, because the rect it came from already applied
+	scale (see docs/layout-manager.md, R4).
+	"""
+
+	x: float
+	y: float
+	w: float
+	h: float
+
+	@property
+	def right(self) -> float:
+		return self.x + self.w
+
+	@property
+	def bottom(self) -> float:
+		return self.y + self.h
+
+	@property
+	def centre_x(self) -> float:
+		return self.x + self.w / 2
+
+	@property
+	def centre_y(self) -> float:
+		return self.y + self.h / 2
+
+	def inset(self, left: float = 0.0, top: float = 0.0, right: float = 0.0, bottom: float = 0.0) -> Rect:
+		"""Shrink by the given amount on each edge."""
+		return Rect(self.x + left, self.y + top, self.w - left - right, self.h - top - bottom)
+
+	def grow(self, left: float = 0.0, top: float = 0.0, right: float = 0.0, bottom: float = 0.0) -> Rect:
+		"""Expand by the given amount on each edge - inset outwards."""
+		return self.inset(-left, -top, -right, -bottom)
+
+	def move(self, dx: float = 0.0, dy: float = 0.0) -> Rect:
+		return Rect(self.x + dx, self.y + dy, self.w, self.h)
+
+	def resize(self, w: float | None = None, h: float | None = None) -> Rect:
+		"""Same origin, new size. Omitted dimensions are kept."""
+		return Rect(self.x, self.y, self.w if w is None else w, self.h if h is None else h)
+
+	def left_edge(self, w: float) -> Rect:
+		"""A full-height strip `w` wide, flush to the left edge."""
+		return Rect(self.x, self.y, w, self.h)
+
+	def right_edge(self, w: float) -> Rect:
+		"""A full-height strip `w` wide, flush to the right edge."""
+		return Rect(self.right - w, self.y, w, self.h)
+
+	def top_edge(self, h: float) -> Rect:
+		"""A full-width strip `h` tall, flush to the top edge."""
+		return Rect(self.x, self.y, self.w, h)
+
+	def bottom_edge(self, h: float) -> Rect:
+		"""A full-width strip `h` tall, flush to the bottom edge."""
+		return Rect(self.x, self.bottom - h, self.w, h)
+
+	def clip_to(self, other: Rect) -> Rect | None:
+		"""Intersection with `other`, or None if they do not overlap.
+
+		For hit rects. TDraw clips drawing (R1) but input is not clipped, so a
+		control that is only half inside its panel must have its hit rect
+		trimmed separately or it answers clicks landing outside the panel.
+		"""
+		x1 = max(self.x, other.x)
+		y1 = max(self.y, other.y)
+		x2 = min(self.right, other.right)
+		y2 = min(self.bottom, other.bottom)
+		if x2 <= x1 or y2 <= y1:
+			return None
+		return Rect(x1, y1, x2 - x1, y2 - y1)
+
+
+class Column:
+	"""Fixed-height rows walking down a rect, addressed by index.
+
+		rows = Column(panel.inset(top=pad), row_h=tab_h, gap=gap)
+		for i in range(rows.whole_rows()):
+			draw(rows.row(i))
+
+	Indexed rather than cursor-driven because immediate-mode panels commonly
+	walk the same list twice - once to handle input, once to draw - and two
+	hand-advanced `y` cursors are two chances to disagree about where row n is.
+	Asking for row n twice gives the same rect by construction.
+
+	Rows past the bottom of the rect are still returned; the caller decides
+	whether to skip them, clip them, or draw them as an overflow affordance.
+	"""
+
+	def __init__(self, rect: Rect, row_h: float, gap: float = 0.0) -> None:
+		self.rect = rect
+		self.row_h = row_h
+		self.gap = gap
+
+	@property
+	def step(self) -> float:
+		"""Distance from one row's top to the next."""
+		return self.row_h + self.gap
+
+	def whole_rows(self) -> int:
+		"""How many rows fit entirely inside the rect.
+
+		The trailing gap does not need to fit, only the last row's height.
+		"""
+		if self.step <= 0:
+			return 0
+		return max(0, int((self.rect.h + self.gap) // self.step))
+
+	def row(self, index: int) -> Rect:
+		return Rect(self.rect.x, self.rect.y + index * self.step, self.rect.w, self.row_h)
+
 
 class ControlRow:
 	"""A horizontal run of controls that measures and positions itself.

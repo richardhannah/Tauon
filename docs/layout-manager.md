@@ -253,9 +253,54 @@ two `display_*_heart` hover rows, which exercise the `field_callback` path. The
 remaining ~140 sites should be converted when they are being edited anyway, not
 in a sweep.
 
-**Phase 2 — layout primitives.** Row, column, padding, spacer, alignment,
-returning rects. Applied only to panels being edited anyway. This is what
-retires the `gui.scale` literals in practice (R4).
+**Phase 2 — layout primitives. Started.** `t_layout.py` holds `Rect`, `Column`
+and `ControlRow`. They compute rects and nothing else: no drawing, no colour, no
+app state, so they are unit-testable — `src/tauon/tests/test_layout.py` is the
+first test coverage this work has had.
+
+`Rect` is a `NamedTuple`, which is the load-bearing decision: existing call sites
+read rects positionally (`ddt.rect`, `coll`, `fields.add` all index `r[0..3]`),
+so a `Rect` can be passed to any of them unchanged. Migration is therefore per
+expression rather than per call site, and a panel can be converted in pieces.
+Its operations are `inset`/`grow`, `move`/`resize`, the edge strips
+(`left_edge`, `right_edge`, `top_edge`, `bottom_edge`) and `clip_to`, which is
+the general form of the hit-rect trimming that panels were writing by hand.
+
+`Column` hands out fixed-height rows by index rather than from a cursor,
+because immediate-mode panels commonly walk the same list twice — once for
+input, once for drawing — and two hand-advanced `y` cursors are two chances to
+disagree about where row *n* is (R3).
+
+On R4, measured on `PlaylistBox.draw` (372 lines before, 369 after):
+
+| | before | after |
+| --- | --- | --- |
+| references to `tab_start` / `tab_width` / `yy` | 62 | 0 |
+| reads of the raw `x, y, w, h` parameters | 34 | 2 |
+| `gui.scale` multiplications | 31 | 32 |
+
+The scale count is the honest part: primitives do **not** reduce it, and a
+wrapper renaming `10 * gui.scale` to `u(10)` would only have moved it. What they
+remove is coordinate re-typing — 62 uses of three hand-maintained scalars became
+zero, and the panel's own parameters are now read exactly twice, in the signature
+and in `panel = Rect(x, y, w, h)`. Every rect after that is derived, and a
+derived rect carries no coordinate and no scale of its own:
+`tab.right_edge(self.indicate_w)`, `row.inset(left=indent)`. Scale is applied
+where a panel establishes its metrics; everything downstream inherits it. The
+`gui.scale` figure will fall when the *metrics* move behind the layer, not from
+renaming multiplications.
+
+Migrated: `PlaylistBox`, whose rows, tab rects, indicators, hit rects and
+trailing drop area are all derived from the rect it is given. This also fixed a
+latent R2 bug: `tab_width` was computed as `w - tab_start` with `tab_start`
+absolute, which is only correct while the panel sits at `x == 0`. It always does
+today, so nothing changed visibly — but the panel is now genuinely
+position-independent.
+
+Verified by capturing the panel before and after, with and without the hit-rect
+overlay: all four images are pixel-identical, so neither the drawing nor any hit
+rect moved. That only proves it at `gui.scale == 1`, which is what the
+development machine runs.
 
 **Phase 3 — migrate panels onto `Widget`.** Opportunistically, when already
 working in a panel. `RectPanelWidget` makes rect-based panels almost free;

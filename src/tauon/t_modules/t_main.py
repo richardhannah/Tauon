@@ -205,7 +205,7 @@ from tauon.t_modules.t_extra import (  # noqa: E402
 )
 from tauon.t_modules.t_guitar_chords import GuitarChords  # noqa: E402
 from tauon.t_modules.t_jellyfin import Jellyfin  # noqa: E402
-from tauon.t_modules.t_layout import ControlRow  # noqa: E402
+from tauon.t_modules.t_layout import Column, ControlRow, Rect  # noqa: E402
 from tauon.t_modules.t_lyrics import genius, get_lrclib_challenge, lyric_sources, uses_scraping  # noqa: E402
 from tauon.t_modules.t_nowplaying_macos import MacNowPlayingHelper  # noqa: E402
 from tauon.t_modules.t_phazor import Cachement, get_phazor_path, phazor_exists, player4  # noqa: E402
@@ -39451,20 +39451,21 @@ class PlaylistBox:
 		pctl  = self.pctl
 		gui   = self.gui
 
+		# Everything in this panel is derived from `panel`, so the tabs follow it
+		# wherever it is placed - the custom layout engine renders this widget at
+		# a (0, 0) origin of its own (R2), and nothing below re-reads x/y/w/h.
+		panel = Rect(x, y, w, h)
+
 		# self.ddt.rect_r((x, y, w, h), self.colours.side_panel_background, True)
-		self.ddt.rect((x, y, w, h), self.colours.playlist_box_background)
+		self.ddt.rect(panel, self.colours.playlist_box_background)
 		self.ddt.text_background_colour = self.colours.playlist_box_background
 
-		# The panel's own rect, taken before w is trimmed for lm themes below, so
-		# the clip around the tab loop always covers the whole panel.
-		panel_rect = (x, y, w, h)
-
-		row_step = self.gap + self.tab_h
 		top_pad = 5 * gui.scale
-		# Whole rows that fit in the panel. Scrolling steps by whole rows, so this
+		# The rows' vertical rhythm. Scrolling steps by whole rows, so whole_rows()
 		# is the unit the scroll range is measured in; one further row is drawn
 		# past it as an affordance (see visible_tab_limit).
-		max_tabs = max(0, int((h - top_pad + self.gap) // max(row_step, 1)))
+		rows = Column(panel.inset(top=top_pad), row_h=self.tab_h, gap=self.gap)
+		max_tabs = rows.whole_rows()
 		scroll_needed = len(pctl.multi_playlist) > max_tabs
 		max_scroll = max(len(pctl.multi_playlist) - max_tabs, 0)
 
@@ -39484,13 +39485,12 @@ class PlaylistBox:
 		indicate_w = round(3 * gui.scale) if light_mode else round(2 * gui.scale)
 
 		show_scroll = False
-		tab_start = x + 10 * self.gui.scale
+		indent = 10 * self.gui.scale
 
 		if self.window_size[0] < 700 * self.gui.scale:
-			tab_start = x + 4 * self.gui.scale
+			indent = 4 * self.gui.scale
 
-		scroll_area = (x, y, w, h)
-		self.scroll_on += self.tauon.smooth_scroll.get_scroll("playlist side pane", scroll_area, row_step)  / max(row_step, 1)
+		self.scroll_on += self.tauon.smooth_scroll.get_scroll("playlist side pane", panel, rows.step) / max(rows.step, 1)
 
 		self.scroll_on = min(self.scroll_on, max_scroll)
 		self.scroll_on = max(self.scroll_on, 0)
@@ -39501,11 +39501,19 @@ class PlaylistBox:
 			self.scroll_on = 0
 
 		if show_scroll:
-			tab_start += 15 * self.gui.scale
+			indent += 15 * self.gui.scale
 
-		if self.colours.lm:
-			w -= round(6 * gui.scale)
-		tab_width = w - tab_start  # - 0 * gui.scale
+		right_trim = round(6 * gui.scale) if self.colours.lm else 0
+
+		def tab_rect(n: int) -> Rect:
+			"""Tab n's rect, counting from the top of the visible run.
+
+			Both loops below ask for the same n and get the same rect back, so
+			the input pass and the draw pass cannot fall out of step - which is
+			what two separately advanced y cursors used to risk (R3).
+			"""
+			return rows.row(n).inset(left=indent, right=right_trim)
+
 		# One row beyond the whole ones, drawn as a scroll affordance: the clip
 		# around the draw loop cuts it at the panel's bottom edge, so a
 		# half-visible tab is the signal that there is more below. The row is
@@ -39513,20 +39521,10 @@ class PlaylistBox:
 		# true. When nothing overflows, the extra iteration finds no playlist.
 		visible_tab_limit = max_tabs + 1
 
-		def clipped_to_box(rect):
-			"""Trim a hit rect to the panel. Clipping applies to drawing only,
-			so the partial bottom row must be made unclickable separately -
-			otherwise it answers clicks landing on the panel below it."""
-			rect_y = max(rect[1], y)
-			rect_bottom = min(rect[1] + rect[3], y + h)
-			if rect_bottom <= rect_y:
-				return None
-			return (rect[0], rect_y, rect[2], rect_bottom - rect_y)
-
 		# Draw scroll bar
 		if show_scroll:
 			self.scroll_on = self.tauon.playlist_panel_scroll.draw(
-				x + 2, y + 1, 15 * self.gui.scale, h, self.scroll_on, max_scroll)
+				panel.x + 2, panel.y + 1, 15 * self.gui.scale, panel.h, self.scroll_on, max_scroll)
 
 		draw_pin_indicator = False  # self.prefs.tabs_on_top
 
@@ -39544,7 +39542,6 @@ class PlaylistBox:
 		# half-drawn. self.scroll_on itself stays fractional so that slow scroll input
 		# still accumulates and eventually steps the list by one whole row.
 		scroll_start = int(self.scroll_on)
-		yy = y + top_pad
 		for i, pl in enumerate(pctl.multi_playlist):
 
 			if tab_on >= visible_tab_limit:
@@ -39555,8 +39552,12 @@ class PlaylistBox:
 			# if not pl.hidden and i in tabs_on_top:
 			# 	continue
 
+			tab = tab_rect(tab_on)
 			tab_on += 1
-			tab_hit_rect = clipped_to_box((tab_start, yy - 1, tab_width, (self.tab_h + 1)))
+			# Clipping applies to drawing only, so the partial bottom row has to
+			# be trimmed here as well or it answers clicks landing below the
+			# panel (R1 covers the pixels, not the input).
+			tab_hit_rect = tab.grow(top=round(1 * gui.scale)).clip_to(panel)
 
 			if tab_hit_rect is not None and self.coll(tab_hit_rect):
 				if self.inp.right_click:
@@ -39632,28 +39633,25 @@ class PlaylistBox:
 						tauon.tree_view_box.clear_target_pl(i)
 
 			# Toggle hidden flag on click
-			pin_hit_rect = clipped_to_box((tab_start + 5 * gui.scale, yy + 3 * gui.scale, 25 * gui.scale, 26 * gui.scale))
+			pin_hit_rect = tab.inset(left=5 * gui.scale, top=3 * gui.scale).resize(
+				w=25 * gui.scale, h=26 * gui.scale).clip_to(panel)
 			if draw_pin_indicator and self.inp.mouse_click and pin_hit_rect is not None and self.coll(pin_hit_rect):
 				pl.hidden ^= True
 
-			yy += self.tab_h + self.gap
-
 		# Bound the tabs to the panel. Nothing drawn below can escape it, which is
 		# what lets the bottom row be drawn partially rather than skipped.
-		with self.ddt.clip(panel_rect):
+		with self.ddt.clip(panel):
 			# Draw tabs
 			# delete_pl = None
 			tab_on = 0
-			yy = y + top_pad
 			for i, pl in enumerate(pctl.multi_playlist):
 
-				# if yy + self.tab_h > y + h:
-				#     break
 				if tab_on >= visible_tab_limit:
 					break
 				if i < scroll_start:
 					continue
 
+				tab = tab_rect(tab_on)
 				tab_on += 1
 
 				name = pl.title
@@ -39665,9 +39663,7 @@ class PlaylistBox:
 					bg = rgb_add_hls(self.colours.playlist_box_background, 0, 0.09, 0)
 					bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
 
-				drop_hit_rect = clipped_to_box(
-					(tab_start + 50 * gui.scale, yy - 1, tab_width - 50 * gui.scale, (self.tab_h + 1))
-				)
+				drop_hit_rect = tab.inset(left=50 * gui.scale).grow(top=round(1 * gui.scale)).clip_to(panel)
 
 				# Highlight if playlist selected (viewing)
 				if i == pctl.active_playlist_viewing or (tauon.tab_menu.active and tauon.tab_menu.reference == i):
@@ -39693,7 +39689,7 @@ class PlaylistBox:
 				real_bg = alpha_blend(bg, self.colours.playlist_box_background)
 
 				# Draw highlight
-				self.ddt.rect((tab_start, yy - round(1 * gui.scale), tab_width, self.tab_h), bg)
+				self.ddt.rect(tab.move(dy=-round(1 * gui.scale)), bg)
 
 				# Draw title text
 				text_start = 10 * gui.scale
@@ -39707,14 +39703,13 @@ class PlaylistBox:
 					if light_mode:
 						cl = ColourRGBA(0, 0, 0, 40)
 
-					xx = tab_start + tab_width - self.lock_icon.w
-					self.lock_icon.render(xx, yy, cl)
+					self.lock_icon.render(tab.right - self.lock_icon.w, tab.y, cl)
 
-				text_max_w = tab_width - text_start - 15 * gui.scale
+				text_max_w = tab.w - text_start - 15 * gui.scale
 				# if indicator_run_x:
 				#     text_max_w = tab_width - (indicator_run_x + text_start + 17 * gui.scale + slide)
 				self.ddt.text(
-					(tab_start + text_start, yy + self.text_offset), name, tab_title_colour if i != pctl.active_playlist_viewing else self.colours.tab_text_active, 211, max_w=text_max_w, bg=real_bg)
+					(tab.x + text_start, tab.y + self.text_offset), name, tab_title_colour if i != pctl.active_playlist_viewing else self.colours.tab_text_active, 211, max_w=text_max_w, bg=real_bg)
 
 				# Is mouse collided with tab?
 				hit = drop_hit_rect is not None and self.coll(drop_hit_rect)
@@ -39725,35 +39720,35 @@ class PlaylistBox:
 					if self.colours.lm:
 						indicator_colour = self.colours.seek_bar_fill
 
-					ddt.rect((tab_start + 0 - 2 * gui.scale, yy - round(1 * gui.scale), indicate_w, self.tab_h), indicator_colour)
+					ddt.rect(tab.left_edge(indicate_w).move(dx=-2 * gui.scale, dy=-round(1 * gui.scale)), indicator_colour)
 
 				# # If mouse over
 				if hit:
 					# Draw indicator for dragging tracks
 					if (self.inp.quick_drag or gui.ext_drop_mode) and self.tauon.pl_is_mut(i):
-						ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(80, 200, 180, 255))
+						ddt.rect(tab.right_edge(self.indicate_w), ColourRGBA(80, 200, 180, 255))
 
 					# Draw indicators for moving tab
 					if self.drag and i != self.drag_on and not point_proximity_test(
 						gui.drag_source_position, self.inp.mouse_position, 10 * gui.scale):
 						if self.inp.key_shift_down:
 							ddt.rect(
-								(tab_start + tab_width - 4 * gui.scale, yy, self.indicate_w, self.tab_h),
+								tab.right_edge(4 * gui.scale).resize(w=self.indicate_w),
 								ColourRGBA(80, 160, 200, 255))
 						elif i < self.drag_on:
-							ddt.rect((tab_start, yy - self.indicate_w, tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
+							ddt.rect(tab.top_edge(self.indicate_w).move(dy=-self.indicate_w), ColourRGBA(80, 160, 200, 255))
 						else:
-							ddt.rect((tab_start, yy + (self.tab_h - self.indicate_w), tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
+							ddt.rect(tab.bottom_edge(self.indicate_w), ColourRGBA(80, 160, 200, 255))
 
 				elif self.inp.quick_drag and not point_proximity_test(gui.drag_source_position, self.inp.mouse_position, 15 * gui.scale):
 					for item in gui.shift_selection:
 						if len(pctl.default_playlist) > item and pctl.default_playlist[item] in pl.playlist_ids:
-							ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(190, 170, 20, 255))
+							ddt.rect(tab.right_edge(self.indicate_w), ColourRGBA(190, 170, 20, 255))
 							break
 				# Drag red line highlight if playlist is generator playlist
 				if self.inp.quick_drag and not point_proximity_test(gui.drag_source_position, self.inp.mouse_position, 15 * gui.scale):
 					if not self.tauon.pl_is_mut(i):
-						ddt.rect((tab_start + tab_width - self.indicate_w, yy, self.indicate_w, self.tab_h), ColourRGBA(200, 70, 50, 255))
+						ddt.rect(tab.right_edge(self.indicate_w), ColourRGBA(200, 70, 50, 255))
 
 				# Draw effect of adding tracks to playlist
 				if len(self.adds) > 0:
@@ -39762,34 +39757,36 @@ class PlaylistBox:
 							if self.adds[k][2].get() > 0.3:
 								del self.adds[k]
 							else:
-								ay = yy + 4 * gui.scale
+								ay = tab.y + 4 * gui.scale
 								ay -= 6 * gui.scale * self.adds[k][2].get() / 0.3
 
 								ddt.text(
-									(tab_start + tab_width - 10 * gui.scale, round(ay), 1),
+									(tab.right - 10 * gui.scale, round(ay), 1),
 									"+" + str(self.adds[k][1]), self.colours.pulse_colour, 212, bg=real_bg)
 								gui.request_frame()
 
 								ddt.rect(
-									(tab_start + tab_width, yy, self.indicate_w, self.tab_h - self.indicate_w),
+									tab.move(dx=tab.w).resize(w=self.indicate_w, h=tab.h - self.indicate_w),
 									ColourRGBA(244, 212, 66, int(255 * self.adds[k][2].get() / 0.3) * -1))
-
-				yy += self.tab_h + self.gap
 
 		if delete_pl is not None:
 			# delete_playlist(delete_pl)
 			self.pctl.delete_playlist_ask(delete_pl)
 			gui.request_frame()
 
-		# Create new playlist if drag in blank space after tabs
-		rect_y = max(yy, y)
-		rect = (x, rect_y, w - 10 * gui.scale, max(0, y + h - rect_y))
-		if rect[3] > 0:
+		# Create new playlist if drag in blank space after tabs. `below` is the row
+		# that would come after the last one drawn, so the blank strip is whatever
+		# is left of the panel underneath it.
+		below = tab_rect(tab_on)
+		rect = Rect(
+			panel.x, max(below.y, panel.y), panel.w - right_trim - 10 * gui.scale,
+			max(0, panel.bottom - max(below.y, panel.y)))
+		if rect.h > 0:
 			self.fields.add(rect)
 
-		if rect[3] > 0 and self.coll(rect):
+		if rect.h > 0 and self.coll(rect):
 			if self.inp.quick_drag or gui.ext_drop_mode:
-				ddt.rect((tab_start, yy, tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
+				ddt.rect(below.top_edge(self.indicate_w), ColourRGBA(80, 160, 200, 255))
 				if self.inp.mouse_up:
 					self.tauon.drop_tracks_to_new_playlist(gui.shift_selection)
 
@@ -39813,9 +39810,9 @@ class PlaylistBox:
 						gui.request_frame()
 						self.drag = False
 				elif self.inp.key_ctrl_down:
-					ddt.rect((tab_start, yy, tab_width, self.indicate_w), ColourRGBA(255, 190, 0, 255))
+					ddt.rect(below.top_edge(self.indicate_w), ColourRGBA(255, 190, 0, 255))
 				else:
-					ddt.rect((tab_start, yy, tab_width, self.indicate_w), ColourRGBA(80, 160, 200, 255))
+					ddt.rect(below.top_edge(self.indicate_w), ColourRGBA(80, 160, 200, 255))
 
 @dataclass
 class ArtistListSaveState:
