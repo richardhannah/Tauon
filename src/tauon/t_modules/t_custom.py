@@ -574,6 +574,9 @@ class TopPanelWidget(Widget):
 	kind = "top_panel"
 	name = "Header Bar"
 	lock_v = True
+	# Intrinsic height, in logical units. This is the source of truth for the
+	# header bar's height: gui.panelY is derived from it, so the standard layout
+	# and this widget cannot disagree (R6).
 	fixed_h = 30
 	min_w = 80
 	min_h = 20
@@ -605,7 +608,9 @@ class PlaybackPanelWidget(Widget):
 	kind = "playback_panel"
 	name = "Playback Panel"
 	lock_v = True
-	fixed_h = 51  # = panelBY at scale 1
+	# Intrinsic height, in logical units, and the source of truth for it:
+	# gui.panelBY is derived from this rather than repeating the number (R6).
+	fixed_h = 51
 	min_w = 120
 	min_h = 30
 	single_instance = True

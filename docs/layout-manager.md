@@ -140,11 +140,22 @@ A widget must derive every coordinate from the `(x, y, w, h)` it is given.
 Reading `window_size` directly defeats the abstraction and breaks the offscreen
 path, where the widget is rendered at a `(0, 0)` origin and reframed.
 
-`BottomBarType1` is the current counter-example: it positions everything from
-`window_size[1] - <literal>`. It works today only because
+`BottomBarType1` was the counter-example: it positioned everything from
+`window_size[1] - <literal>`, 29 times, and worked only because
 `PlaybackPanelWidget.draw()` calls `bar.update()` and `bar.render()` against the
-real window. Panels written this way are the expensive ones to migrate; panels
-already taking a rect are nearly free.
+real window with `window_size` temporarily narrowed to the segment.
+
+It now derives from `self.rect` instead, and reads the window in exactly one
+place — `place()`, which supplies the default bottom-anchored rect when no rect
+is passed. `update(rect)` and `render(rect)` accept one, so the custom layout
+engine can hand the bar its segment directly rather than lying to it about the
+window size. That last step is not yet taken: it cannot be exercised without
+being in custom mode, so the engine still narrows `window_size` as before and
+the bar computes the same rect it always did.
+
+`PlaylistBox` is the other side of this: it took a rect already, but computed
+`tab_width` as `w - tab_start` with `tab_start` absolute, which is only correct
+at `x == 0`. Taking a rect is not the same as being position-independent.
 
 ### R3. Draw geometry and hit geometry share one source
 
@@ -176,14 +187,26 @@ rendering in local view space registers hover regions in real screen
 coordinates. Any new abstraction must route through this rather than around it,
 or offscreen widgets will draw correctly and be un-clickable.
 
-### R6. Fixed sizes need a single source of truth
+### R6. Fixed sizes need a single source of truth — **done**
 
-`gui.panelBY` is `round(51 * scale)`. `PlaybackPanelWidget` separately declares
-`fixed_h = 51  # = panelBY at scale 1`. These are two copies of one fact, kept in
-agreement by a comment. The recent bottom-bar work had to leave `panelBY` at 51
+`gui.panelBY` was `round(51 * scale)` while `PlaybackPanelWidget` separately
+declared `fixed_h = 51  # = panelBY at scale 1`: two copies of one fact kept in
+agreement by a comment. The bottom-bar work had to leave `panelBY` at 51
 specifically to avoid desyncing them — a taller bottom bar would have silently
-broken the custom layout engine. A layout manager must let a widget publish its
-intrinsic height once and have both the standard and custom paths read it.
+broken the custom layout engine.
+
+The widget now publishes the fact and both paths read it:
+
+```python
+self.panelBY = round(PlaybackPanelWidget.fixed_h * self.scale)
+self.panelY = round(TopPanelWidget.fixed_h * self.scale)
+```
+
+Note what is *not* folded in. `gui.panelY` becomes `round(100 * scale)` in the
+art-header mode, which is a different layout mode rather than a second copy of
+the header's intrinsic height, and `gui.panelY2` is the tab-strip height that
+merely happens to equal 30. Collapsing either into the widget's `fixed_h` would
+be a coincidence encoded as a dependency.
 
 ### R7. Layouts must degrade explicitly at small sizes
 
@@ -302,9 +325,26 @@ overlay: all four images are pixel-identical, so neither the drawing nor any hit
 rect moved. That only proves it at `gui.scale == 1`, which is what the
 development machine runs.
 
-**Phase 3 — migrate panels onto `Widget`.** Opportunistically, when already
-working in a panel. `RectPanelWidget` makes rect-based panels almost free;
-window-reading panels need R2 work first.
+**Phase 3 — migrate panels onto `Widget`. Started.** The rect-based panels
+(playlist list, queue, artist list, folder nav, artist info) were already
+widgets through `RectPanelWidget` and are fully interactive in custom mode. What
+remained were the two window-reading panels, wrapped by narrowing `window_size`
+and rendering offscreen — the workaround R2 describes.
+
+Done so far: R6 (above), so the two panel heights have one source; and the R2
+conversion of `BottomBarType1`, from 29 window reads to one. The header bar is
+the same shape of work and has 11.
+
+The step after that is the payoff: `PlaybackPanelWidget.draw()` passing its own
+rect to `bar.update()`/`bar.render()` instead of relying on the engine narrowing
+`window_size`. The bar already accepts it. It is held back because it can only be
+exercised from custom mode, which needs a custom layout configured to test —
+worth doing by someone who runs custom mode, not blind.
+
+`BottomBarType_ao1`, the shuffle-lock variant, still reads the window 22 times.
+It duplicates `BottomBarType1` with small differences and has already drifted;
+see the open question below before converting it, because the answer changes
+whether it is worth converting at all.
 
 **Phase 4 — consider an external layout engine.** Only if real flexbox
 semantics turn out to be needed. Any candidate must build for the MSYS2/MINGW64

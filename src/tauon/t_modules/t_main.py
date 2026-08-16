@@ -119,6 +119,8 @@ from tauon.t_modules.t_custom import (  # noqa: E402
 	AlbumflowWidget,
 	CustomLayout,
 	GridGalleryWidget,
+	PlaybackPanelWidget,
+	TopPanelWidget,
 	draw_layout_glyph,
 )
 from tauon.t_modules.t_draw import QuickThumbnail, TDraw  # noqa: E402
@@ -641,8 +643,13 @@ class GuiVar:
 		self.bar = sdl3.SDL_FRect(10, 10, round(3 * self.scale), 10)  # spec bar bin
 		self.bar4 = sdl3.SDL_FRect(10, 10, round(3 * self.scale), 10)  # spec bar bin
 		self.set_height = round(25 * self.scale)
-		self.panelBY = round(51 * self.scale)
-		self.panelY = round(30 * self.scale)
+		# One source of truth for the two panel heights: the widget publishes its
+		# intrinsic height in logical units, and both the standard layout here and
+		# the custom layout engine read it. These used to be two copies of one
+		# fact kept in agreement by a comment, so a taller bottom bar would have
+		# silently broken the custom layout (R6).
+		self.panelBY = round(PlaybackPanelWidget.fixed_h * self.scale)
+		self.panelY = round(TopPanelWidget.fixed_h * self.scale)
 		self.panelY2 = round(30 * self.scale)
 		self.playlist_top = self.panelY + (8 * self.scale)
 		self.playlist_top_bk = self.playlist_top
@@ -14808,7 +14815,9 @@ class Tauon:
 			gui.playlist_top_bk = gui.playlist_top
 		else:
 			gui.top_bar_mode2 = False
-			gui.panelY = round(30 * gui.scale)
+			# The art header is a different layout mode with its own height above;
+			# 30 is the header bar's own, which the widget publishes (R6).
+			gui.panelY = round(TopPanelWidget.fixed_h * gui.scale)
 			gui.playlist_top = gui.panelY + (8 * gui.scale)
 			gui.playlist_top_bk = gui.playlist_top
 
@@ -33731,9 +33740,15 @@ class BottomBarType1:
 		self.repeat_click_off = False
 		self.random_click_off = False
 
+		# The bar's own rect. Everything below is derived from it rather than read
+		# from the window, so the panel can be placed anywhere (R2); place() is the
+		# one remaining window read, and it is only the default.
+		self.rect = Rect(0, 0, 0, 0)
+		self.place()
+
 		# Real values are set every frame in update(); these are just sane starting points
-		self.seek_bar_position = [180 * self.gui.scale, self.window_size[1] - (17 * self.gui.scale)]
-		self.seek_bar_size = [self.window_size[0] - (360 * self.gui.scale), 7 * self.gui.scale]
+		self.seek_bar_position = [180 * self.gui.scale, self.rect.bottom - (17 * self.gui.scale)]
+		self.seek_bar_size = [self.rect.w - (360 * self.gui.scale), 7 * self.gui.scale]
 		self.volume_bar_size = [135 * self.gui.scale, 14 * self.gui.scale]
 		self.volume_bar_position = [0, 45 * self.gui.scale]
 
@@ -33751,6 +33766,18 @@ class BottomBarType1:
 
 		self.scrob_stick = 0
 
+	def place(self, rect: Rect | None = None) -> None:
+		"""Set the rect the bar draws into.
+
+		With no argument it takes its standard bottom-anchored position across
+		the window, which is the only place in this panel that reads the window
+		size. A caller that has a rect for it - the custom layout engine - passes
+		one instead, and nothing else in the panel changes.
+		"""
+		if rect is None:
+			rect = Rect(0, self.window_size[1] - self.gui.panelBY, self.window_size[0], self.gui.panelBY)
+		self.rect = rect
+
 	def build_transport_row(self) -> tuple[ControlRow, bool]:
 		"""Lay out the transport buttons and report whether they ended up centred.
 
@@ -33764,7 +33791,7 @@ class BottomBarType1:
 		def make(with_modes: bool) -> ControlRow:
 			row = ControlRow(
 				spacing=36 * scale,
-				hit_y=self.window_size[1] - self.control_line_bottom - (7 * scale),
+				hit_y=self.rect.bottom - self.control_line_bottom - (7 * scale),
 				hit_h=27 * scale)
 			# Declaration order is display order. Shuffle and repeat bracket the
 			# transport, with play/pause centred between skip back and skip forward,
@@ -33784,20 +33811,21 @@ class BottomBarType1:
 		# Only centre while there is room: the right-hand controls start at W - 380,
 		# so a centred cluster needs its own width plus roughly twice that clearance.
 		row = make(with_modes=self.mode == 0)
-		centred = self.window_size[0] > row.width + (800 * scale)
+		centred = self.rect.w > row.width + (800 * scale)
 		if centred:
-			row.place_centred(self.window_size[0] / 2)
+			row.place_centred(self.rect.centre_x)
 		else:
 			# Left-aligned there is no room for the mode buttons either - the full
 			# row would reach the menu button - so drop them and re-measure.
 			row = make(with_modes=False)
-			row.place(29 * scale)
+			row.place(self.rect.x + 29 * scale)
 		return row, centred
 
-	def update(self) -> None:
+	def update(self, rect: Rect | None = None) -> None:
+		self.place(rect)
 		if self.mode == 0:
-			self.volume_bar_position[0] = self.window_size[0] - (210 * self.gui.scale)
-			self.volume_bar_position[1] = self.window_size[1] - (36 * self.gui.scale)
+			self.volume_bar_position[0] = self.rect.right - (210 * self.gui.scale)
+			self.volume_bar_position[1] = self.rect.bottom - (36 * self.gui.scale)
 
 			# The seek bar sits on its own row underneath the transport cluster.
 			# When the cluster is centred the bar is a proportion of the window so
@@ -33806,14 +33834,14 @@ class BottomBarType1:
 			# left-aligned buttons and keeps the target usable on a small window.
 			_, centred = self.build_transport_row()
 			if centred:
-				seek_w = round(self.window_size[0] * 0.4)
+				seek_w = round(self.rect.w * 0.4)
 			else:
-				seek_w = self.window_size[0] - (80 * self.gui.scale)
+				seek_w = self.rect.w - (80 * self.gui.scale)
 			seek_w = max(seek_w, 120 * self.gui.scale)
 
-			self.seek_bar_position[0] = round((self.window_size[0] - seek_w) / 2)
+			self.seek_bar_position[0] = round(self.rect.centre_x - (seek_w / 2))
 			self.seek_bar_size[0] = seek_w
-			self.seek_bar_position[1] = self.window_size[1] - (17 * self.gui.scale)
+			self.seek_bar_position[1] = self.rect.bottom - (17 * self.gui.scale)
 			self.seek_bar_size[1] = 7 * self.gui.scale
 
 			# if gui.bb_show_art:
@@ -33823,8 +33851,9 @@ class BottomBarType1:
 			# self.seek_bar_position[0] = 0
 			# self.seek_bar_size[0] = window_size[0]
 
-	def render(self) -> None:
-		window_size = self.window_size
+	def render(self, rect: Rect | None = None) -> None:
+		self.place(rect)
+		bar         = self.rect
 		tauon       = self.tauon
 		ddt         = self.ddt
 		gui         = self.gui
@@ -33838,7 +33867,7 @@ class BottomBarType1:
 		# is underneath, in which case blend over it
 		if not self.gui.have_art_bg:
 			sdl3.SDL_SetRenderDrawBlendMode(self.renderer, sdl3.SDL_BLENDMODE_NONE)
-		ddt.rect_a((0, self.window_size[1] - self.gui.panelBY), (self.window_size[0], self.gui.panelBY), colours.bottom_panel_colour)
+		ddt.rect(bar, colours.bottom_panel_colour)
 		sdl3.SDL_SetRenderDrawBlendMode(self.renderer, sdl3.SDL_BLENDMODE_BLEND)
 
 		# Laid out up here because the track title below caps its width against the
@@ -33870,14 +33899,14 @@ class BottomBarType1:
 			self.volume_bar_position[0] + self.volume_bar_size[0] / 2,
 			self.volume_bar_position[1] + self.volume_bar_size[1] / 2,
 			panel=colours.bottom_panel_colour)
-		buttons_y = window_size[1] - self.control_line_bottom
+		buttons_y = bar.bottom - self.control_line_bottom
 		panel_bg = colours.bottom_panel_colour
 		mb_off = so.tint_from_background(colours.media_buttons_off, 150 * gui.scale, buttons_y, 0.2, panel_bg)
 		mb_active = so.tint_from_background(colours.media_buttons_active, 150 * gui.scale, buttons_y, 0.2, panel_bg)
 		mb_over = so.tint_from_background(colours.media_buttons_over, 150 * gui.scale, buttons_y, 0.2, panel_bg)
-		md_off = so.tint_from_background(colours.mode_button_off, window_size[0] - 120 * gui.scale, buttons_y, 0.2, panel_bg)
-		md_active = so.tint_from_background(colours.mode_button_active, window_size[0] - 120 * gui.scale, buttons_y, 0.2, panel_bg)
-		md_over = so.tint_from_background(colours.mode_button_over, window_size[0] - 120 * gui.scale, buttons_y, 0.2, panel_bg)
+		md_off = so.tint_from_background(colours.mode_button_off, bar.right - 120 * gui.scale, buttons_y, 0.2, panel_bg)
+		md_active = so.tint_from_background(colours.mode_button_active, bar.right - 120 * gui.scale, buttons_y, 0.2, panel_bg)
+		md_over = so.tint_from_background(colours.mode_button_over, bar.right - 120 * gui.scale, buttons_y, 0.2, panel_bg)
 
 		ddt.rect_a(self.seek_bar_position, self.seek_bar_size, seek_bg)
 
@@ -33885,7 +33914,7 @@ class BottomBarType1:
 		if gui.display_time_mode >= 2:
 			right_offset = 22 * self.gui.scale
 
-		if self.window_size[0] < 670 * self.gui.scale:
+		if bar.w < 670 * self.gui.scale:
 			right_offset -= 90 * self.gui.scale
 		# Scrobble marker
 
@@ -34059,9 +34088,9 @@ class BottomBarType1:
 			pctl.set_volume()
 
 		# Volume Bar 2 ------------------------------------------------
-		if window_size[0] < 670 * gui.scale:
-			x = window_size[0] - right_offset - 207 * gui.scale
-			y = window_size[1] - round(14 * gui.scale)
+		if bar.w < 670 * gui.scale:
+			x = bar.right - right_offset - 207 * gui.scale
+			y = bar.bottom - round(14 * gui.scale)
 
 			rect = (x - 8 * gui.scale, y - 17 * gui.scale, 55 * gui.scale, 23 * gui.scale)
 			# ddt.rect(rect, [255,255,255,25])
@@ -34204,7 +34233,7 @@ class BottomBarType1:
 		if not prefs.hide_bottom_title:
 			gui.show_bottom_title = True
 
-		if gui.show_bottom_title and pctl.playing_state != PlayingState.STOPPED and window_size[0] > 820 * gui.scale:
+		if gui.show_bottom_title and pctl.playing_state != PlayingState.STOPPED and bar.w > 820 * gui.scale:
 			line = pctl.title_text()
 
 			# The title used to hang off the seek bar's left edge. The seek bar now
@@ -34214,7 +34243,7 @@ class BottomBarType1:
 			mx = max(120 * gui.scale, cluster_left_x - x - (30 * gui.scale))
 
 			ddt.text(
-				(x, window_size[1] - 36 * gui.scale), line, colours.bar_title_text,
+				(x, bar.bottom - 36 * gui.scale), line, colours.bar_title_text,
 				fonts.panel_title, max_w=mx)
 
 		# Click target for the title text. Kept in step with the title's new
@@ -34222,7 +34251,7 @@ class BottomBarType1:
 		title_hit_x = 20 * gui.scale
 		title_hit_w = max(120 * gui.scale, cluster_left_x - title_hit_x - (30 * gui.scale))
 		if (inp.mouse_click or inp.right_click) and self.coll((
-				title_hit_x - (10 * gui.scale), window_size[1] - (40 * gui.scale),
+				title_hit_x - (10 * gui.scale), bar.bottom - (40 * gui.scale),
 				title_hit_w + (20 * gui.scale), 26 * gui.scale)):
 			# if pctl.playing_state == PlayingState.URL_STREAM:
 			# 	copy_to_clipboard(pctl.tag_meta)
@@ -34246,10 +34275,10 @@ class BottomBarType1:
 
 		# TIME----------------------
 
-		x = window_size[0] - 57 * gui.scale
+		x = bar.right - 57 * gui.scale
 		# Raised in step with the title and volume bar, so the whole upper row of the
 		# bottom panel sits above the seek bar rather than beside it
-		y = window_size[1] - 38 * gui.scale
+		y = bar.bottom - 38 * gui.scale
 
 		r_start = x - 10 * gui.scale
 		if gui.display_time_mode in (2, 3):
@@ -34351,7 +34380,7 @@ class BottomBarType1:
 			# The transport row was laid out at the top of render(); positions and hit
 			# rects both come from it, so they cannot drift apart. Keep hit_pad below
 			# half the row spacing or adjacent rects overlap.
-			y = window_size[1] - self.control_line_bottom
+			y = bar.bottom - self.control_line_bottom
 			hit_pad = 12 * gui.scale
 
 			pp_colour = mb_off
@@ -34541,9 +34570,9 @@ class BottomBarType1:
 
 			# menu button
 
-			x = window_size[0] - 252 * gui.scale - right_offset
+			x = bar.right - 252 * gui.scale - right_offset
 			# Raised onto the upper row with the volume bar and time, clear of the seek bar
-			y = window_size[1] - round(36 * gui.scale)
+			y = bar.bottom - round(36 * gui.scale)
 			rpbc = md_off
 			rect = (x - 9 * gui.scale, y - 5 * gui.scale, 40 * gui.scale, 25 * gui.scale)
 			self.fields.add(rect)
