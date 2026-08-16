@@ -7287,6 +7287,52 @@ class Tauon:
 			self.gui.debug_hit_rects.add((round(r[0] + ox), round(r[1] + oy), round(r[2]), round(r[3])))
 		return r[0] < self.inp.mouse_position[0] <= r[0] + r[2] and r[1] <= self.inp.mouse_position[1] <= r[1] + r[3]
 
+	def control(
+		self,
+		rect: tuple[float, float, float, float],
+		tooltip: str = "",
+		tooltip_at: tuple[float, float] | None = None,
+		tooltip_box: ToolTip | None = None,
+		field_callback: Callable[[], None] | None = None,
+	) -> Control:
+		"""Register one interactive rect and report what the pointer is doing to it.
+
+		Bundles the four registrations every control has otherwise had to make
+		by hand against the same rect: the hover field, the hit test, the click
+		flags and a tooltip. Written out per control they drift apart - the
+		transport cluster once moved its icons while five hand-written hit rects
+		stayed behind (docs/layout-manager.md, R3). Here one rect feeds all of
+		them, so they cannot disagree.
+
+		Nothing is consumed: a control that must stop later handlers seeing the
+		click still clears inp.mouse_click itself, so that stays visible at the
+		call site rather than becoming a hidden side effect.
+
+		Drawing and colour stay with the caller. A control's appearance depends
+		on more than hover - latched, active, menu-open - and layout code owns
+		no colour (R9). Callers whose tooltip depends on state settled later in
+		the frame (BottomBarType1's back button suppresses its tip right after a
+		click) should leave `tooltip` unset and call the tooltip themselves.
+		"""
+		self.fields.add(rect, field_callback)
+		hover = self.coll(rect)
+
+		if hover and tooltip:
+			if tooltip_at is None:
+				tooltip_at = (rect[0], rect[1] - 28 * self.gui.scale)
+			box = self.tool_tip2 if tooltip_box is None else tooltip_box
+			box.test(tooltip_at[0], tooltip_at[1], tooltip)
+
+		inp = self.inp
+		return Control(
+			rect=rect,
+			hover=hover,
+			click=hover and inp.mouse_click,
+			right_click=hover and inp.right_click,
+			middle_click=hover and inp.middle_click,
+			down=hover and inp.mouse_down,
+		)
+
 	def draw_hit_overlay(self) -> None:
 		"""Stroke every hover field and hit rect registered this frame.
 
@@ -14538,8 +14584,7 @@ class Tauon:
 	def display_you_heart(self, x: int, yy: int, just: int = 0) -> None:
 		rect = [x - 1 * self.gui.scale, yy - 4 * self.gui.scale, 15 * self.gui.scale, 17 * self.gui.scale]
 		self.gui.heart_fields.append(rect)
-		self.fields.add(rect, self.update_playlist_call)
-		if self.coll(rect) and not self.gui.track_box:
+		if self.control(rect, field_callback=self.update_playlist_call).hover and not self.gui.track_box:
 			self.gui.request_tracklist_redraw()
 			w = self.ddt.get_text_w(_("You"), 13)
 			xx = (x - w) - 5 * self.gui.scale
@@ -14565,8 +14610,7 @@ class Tauon:
 
 		rect = [x - 1, yy - 4, 15 * self.gui.scale, 17 * self.gui.scale]
 		self.gui.heart_fields.append(rect)
-		self.fields.add(rect, self.update_playlist_call)
-		if self.coll(rect) and not self.gui.track_box:
+		if self.control(rect, field_callback=self.update_playlist_call).hover and not self.gui.track_box:
 			self.gui.request_tracklist_redraw()
 			w = self.ddt.get_text_w(name, 13)
 			xx = (x - w) - 5 * self.gui.scale
@@ -32575,6 +32619,22 @@ class Over:
 
 		ddt.text_background_colour = colours.box_background
 
+@dataclass
+class Control:
+	"""What one interactive rect is doing this frame. See Tauon.control().
+
+	The click flags are already gated on hover, so `if c.click:` is the whole
+	test - there is no second chance to forget the hit test that goes with it.
+	"""
+
+	rect: tuple[float, float, float, float]
+	hover: bool = False
+	click: bool = False
+	right_click: bool = False
+	middle_click: bool = False
+	down: bool = False
+
+
 class Fields:
 	def __init__(self, tauon: Tauon) -> None:
 		self.tauon = tauon
@@ -34307,26 +34367,26 @@ class BottomBarType1:
 			# SHUFFLE---
 			if transport.has("shuffle"):
 				sx = transport.x("shuffle")
-				rect = transport.hit("shuffle", hit_pad)
-				self.fields.add(rect)
+				shuffle = tauon.control(
+					transport.hit("shuffle", hit_pad),
+					tooltip=_("Shuffle"),
+					tooltip_at=(sx, y - 28 * gui.scale),
+					tooltip_box=tauon.tool_tip,
+				)
 
 				rpbc = md_off
 				off = True
-				if (inp.mouse_click or inp.right_click) and self.coll(rect):
-					if inp.mouse_click:
-						tauon.toggle_random()
-						if pctl.random_mode is False:
-							self.random_click_off = True
-					else:
-						tauon.shuffle_menu.activate(position=(sx + 30 * gui.scale, y - 7 * gui.scale))
+				if shuffle.click:
+					tauon.toggle_random()
+					if pctl.random_mode is False:
+						self.random_click_off = True
+				elif shuffle.right_click:
+					tauon.shuffle_menu.activate(position=(sx + 30 * gui.scale, y - 7 * gui.scale))
 
 				if pctl.random_mode:
 					rpbc = md_active
 					off = False
-					if self.coll(rect):
-						tauon.tool_tip.test(sx, y - 28 * gui.scale, _("Shuffle"))
-				elif self.coll(rect):
-					tauon.tool_tip.test(sx, y - 28 * gui.scale, _("Shuffle"))
+				elif shuffle.hover:
 					if self.random_click_off is True:
 						rpbc = md_off
 					elif pctl.random_mode is True:
@@ -34352,18 +34412,19 @@ class BottomBarType1:
 			# play otherwise. pctl.play_pause() already resolves every state,
 			# including stopping a URL stream.
 			px = transport.x("playpause")
-			rect = transport.hit("playpause", hit_pad)
-			self.fields.add(rect)
 			showing_pause = pctl.playing_state == PlayingState.PLAYING
-			if self.coll(rect):
+			play_pause = tauon.control(
+				transport.hit("playpause", hit_pad),
+				tooltip=_("Pause") if showing_pause else _("Play, RC: Go to playing"),
+				tooltip_at=(px, y - 35 * gui.scale),
+			)
+			if play_pause.hover:
 				pp_colour = mb_over
-				if inp.mouse_click:
-					pctl.play_pause()
-					inp.mouse_click = False
-				if inp.right_click:
-					pctl.show_current(highlight=True)
-				tip = _("Pause") if showing_pause else _("Play, RC: Go to playing")
-				tauon.tool_tip2.test(px, y - 35 * gui.scale, tip)
+			if play_pause.click:
+				pctl.play_pause()
+				inp.mouse_click = False
+			if play_pause.right_click:
+				pctl.show_current(highlight=True)
 
 			if showing_pause:
 				ddt.rect_a((px, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
@@ -34372,14 +34433,13 @@ class BottomBarType1:
 				self.play_button.render(px, y, pp_colour)
 
 			# FORWARD---
-			rect = transport.hit("forward", hit_pad)
-			self.fields.add(rect)
-			if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
+			forward = tauon.control(transport.hit("forward", hit_pad))
+			if forward.hover and pctl.playing_state != PlayingState.URL_STREAM:
 				forward_colour = mb_over
-				if inp.mouse_click:
+				if forward.click:
 					pctl.advance()
 					gui.tool_tip_lock_off_f = True
-				if inp.right_click:
+				if forward.right_click:
 					# pctl.random_mode ^= True
 					tauon.toggle_random()
 					gui.tool_tip_lock_off_f = True
@@ -34391,7 +34451,7 @@ class BottomBarType1:
 						gui.mode_toast_text = _("Shuffle Off")
 					tauon.toast_mode_timer.set()
 					gui.delay_frame(1)
-				if self.inp.middle_click:
+				if forward.middle_click:
 					pctl.advance(rr=True)
 					gui.tool_tip_lock_off_f = True
 				# tauon.tool_tip.test(buttons_x_offset + 230 * gui.scale + 50 * gui.scale, window_size[1] - self.control_line_bottom - 20 * gui.scale, "Advance")
@@ -34403,14 +34463,13 @@ class BottomBarType1:
 			self.forward_button.render(transport.x("forward"), 1 + y, forward_colour)
 
 			# BACK---
-			rect = transport.hit("back", hit_pad)
-			self.fields.add(rect)
-			if self.coll(rect) and pctl.playing_state != PlayingState.URL_STREAM:
+			back = tauon.control(transport.hit("back", hit_pad))
+			if back.hover and pctl.playing_state != PlayingState.URL_STREAM:
 				back_colour = mb_over
-				if inp.mouse_click:
+				if back.click:
 					pctl.back()
 					gui.tool_tip_lock_off_b = True
-				if inp.right_click:
+				if back.right_click:
 					tauon.toggle_repeat()
 					gui.tool_tip_lock_off_b = True
 					# if window_size[0] < 600 * gui.scale:
@@ -34421,7 +34480,7 @@ class BottomBarType1:
 						gui.mode_toast_text = _("Repeat Off")
 					tauon.toast_mode_timer.set()
 					gui.delay_frame(1)
-				if self.inp.middle_click:
+				if back.middle_click:
 					pctl.revert()
 					gui.tool_tip_lock_off_b = True
 				if not gui.tool_tip_lock_off_b:
@@ -34434,26 +34493,26 @@ class BottomBarType1:
 			# REPEAT---
 			if transport.has("repeat"):
 				rx = transport.x("repeat")
-				rect = transport.hit("repeat", hit_pad)
-				self.fields.add(rect)
+				# No tooltip= here: it is suppressed while either mode menu is open,
+				# which is not known until below.
+				repeat = tauon.control(transport.hit("repeat", hit_pad))
 
 				rpbc = md_off
 				off = True
-				if (inp.mouse_click or inp.right_click) and self.coll(rect):
-					if inp.mouse_click:
-						tauon.toggle_repeat()
-						if pctl.repeat_mode is False:
-							self.repeat_click_off = True
-					else:  # right click
-						tauon.repeat_menu.activate(position=(rx + 30 * gui.scale, y - 7 * gui.scale))
+				if repeat.click:
+					tauon.toggle_repeat()
+					if pctl.repeat_mode is False:
+						self.repeat_click_off = True
+				elif repeat.right_click:
+					tauon.repeat_menu.activate(position=(rx + 30 * gui.scale, y - 7 * gui.scale))
 
 				repeat_tip = _("Repeat album") if pctl.album_repeat_mode else _("Repeat track")
 				if pctl.repeat_mode:
 					rpbc = md_active
 					off = False
-					if self.coll(rect):
+					if repeat.hover:
 						tauon.tool_tip.test(rx, y - 28 * gui.scale, repeat_tip)
-				elif self.coll(rect):
+				elif repeat.hover:
 					# Tooltips. But don't show tooltips if menus open
 					if not tauon.repeat_menu.active and not tauon.shuffle_menu.active:
 						tauon.tool_tip.test(rx, y - 28 * gui.scale, repeat_tip)

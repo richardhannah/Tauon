@@ -159,8 +159,9 @@ icons — harmless while the cluster sat far left, but once centred they overhun
 the panel into the content area.
 
 Note that hit-testing (`coll`) and hover invalidation (`fields.add`) are two
-separate registrations that must currently be kept in sync by hand. A control
-helper must register both.
+separate registrations that must otherwise be kept in sync by hand. This is what
+`Tauon.control()` is for (Phase 1): one rect, both registrations. Controls that
+have not been migrated to it still make them separately.
 
 ### R4. Scale is applied by the layout layer
 
@@ -224,12 +225,33 @@ Note that clipping constrains *drawing* only. Hit rects are still trimmed by han
 is visible — the R3 problem in miniature, and one of the things a control helper
 should absorb.
 
-**Phase 1 — a control helper.** One function bundling rect, `coll`, hover
-colour, click dispatch, `fields.add` and tooltip. This pattern is written out by
-hand roughly 150 times, and each repetition is an opportunity for R3 to be
-violated. Mechanical and individually verifiable — and now checkable against the
-hit-rect overlay described under Verification, which is what makes "the helper
-registered both" something you can see rather than assume.
+**Phase 1 — a control helper. Exists; migration is opportunistic.**
+`Tauon.control(rect, ...)` takes one rect and does the four registrations that
+were previously written out per control — `fields.add`, `coll`, the click flags,
+and a tooltip — returning a `Control` with `hover`, `click`, `right_click`,
+`middle_click` and `down`. The click flags are gated on hover, so `if c.click:`
+is the whole test and there is no separate hit test to forget.
+
+Two things it deliberately does not do:
+
+- **It does not consume clicks.** A control that must stop later handlers seeing
+  a click still clears `inp.mouse_click` itself, so that stays visible at the
+  call site instead of becoming a hidden side effect of the helper.
+- **It does not choose colour.** Appearance depends on more than hover — latched,
+  active, menu-open — and layout code owns no colour (R9). The helper's
+  contribution is that hover is computed once from the same rect that was
+  registered, so the colour decision cannot disagree with the hit test.
+
+Sites whose tooltip depends on state that settles later in the frame (the back
+button suppresses its tip right after a click; repeat suppresses it while a mode
+menu is open) skip the `tooltip=` argument and call the tooltip themselves,
+gated on `c.hover`.
+
+Migrated so far: the five transport buttons in `BottomBarType1` — the cluster
+whose hit rects drifted, so the R3 case is now expressed in the API — and the
+two `display_*_heart` hover rows, which exercise the `field_callback` path. The
+remaining ~140 sites should be converted when they are being edited anyway, not
+in a sweep.
 
 **Phase 2 — layout primitives.** Row, column, padding, spacer, alignment,
 returning rects. Applied only to panels being edited anyway. This is what
