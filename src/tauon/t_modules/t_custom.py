@@ -726,10 +726,11 @@ class MetaCenteredWidget(MetaWidget):
 
 class LyricsWidget(MetaWidget):
 	"""Static lyrics via MetaBox.lyrics, or synced (LRC) lyrics via
-	TimedLyricsRen when available — the preset side panel does this branch in
-	the main render loop, so the widget replicates it. The synced renderer's
-	side_panel mode lays out against gui.rsp_x/rspw/panelY/panelBY, so those
-	are pointed at the segment for the call (window_size is already reframed).
+	TimedLyricsRen when available — the preset side panel does the same branch
+	in RightPanel, so the widget replicates it. The synced renderer takes its
+	background area and its click area as rects now, so the segment is passed
+	in rather than published through gui.rsp_x/rspw/panelY/panelBY and put back
+	afterwards (docs/layout-manager.md, R2).
 	"""
 
 	kind = "lyrics"
@@ -757,16 +758,11 @@ class LyricsWidget(MetaWidget):
 			gui.force_showcase_index = -1
 			tauon.showcase_menu.activate(track)
 
-		saved = (gui.rsp_x, gui.rspw, gui.panelY, gui.panelBY)
-		gui.rsp_x, gui.rspw = round(x), round(w)
-		gui.panelY = round(y)
-		gui.panelBY = max(0, tauon.window_size[1] - round(y + h))
-		try:
-			tauon.timed_lyrics_ren.render(
-				track.index, round(x + 9 * gui.scale), round(y),
-				side_panel=True, w=round(w), h=round(h))
-		finally:
-			gui.rsp_x, gui.rspw, gui.panelY, gui.panelBY = saved
+		segment = (round(x), round(y), round(w), round(h))
+		tauon.timed_lyrics_ren.render(
+			track.index, round(x + 9 * gui.scale), round(y),
+			side_panel=True, w=round(w), h=round(h),
+			frame=segment, gate=segment)
 
 
 class TracklistWidget(Widget):

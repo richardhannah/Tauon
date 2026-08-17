@@ -21929,7 +21929,22 @@ class TimedLyricsRen:
 		self.ready = True
 		return True
 
-	def render(self, index: int, x: int, y: int, side_panel: bool = False, w: int = 0, h: int = 0) -> bool | None:
+	def render(
+		self, index: int, x: int, y: int, side_panel: bool = False, w: int = 0, h: int = 0,
+		frame: tuple[float, float, float, float] | None = None,
+		gate: tuple[float, float, float, float] | None = None,
+	) -> bool | None:
+		"""Draw the synced lyrics at (x, y) into a w x h area.
+
+		`frame` is what the side-panel background paints over, and `gate` the
+		area within which a click counts as a click on these lyrics. Both were
+		read from gui.rsp_x/gui.rspw/gui.panelY/gui.panelBY, which meant any
+		caller drawing somewhere other than the preset right panel had to point
+		those four globals at itself for the duration of the call and put them
+		back afterwards - which is what LyricsWidget did
+		(docs/layout-manager.md, R2). Omitting them falls back to exactly those
+		globals, so the showcase caller needs no change.
+		"""
 		if index != self.index or self.lrm.to_reload:
 			self.ready = False
 			self.generate(self.pctl.master_library[index])
@@ -21943,6 +21958,24 @@ class TimedLyricsRen:
 		if not self.ready:
 			return False
 
+		if frame is None:
+			frame = Rect(self.gui.rsp_x, y, self.gui.rspw, h)
+		else:
+			frame = Rect(*frame)
+
+		if gate is None:
+			gate = Rect(
+				0, self.gui.panelY, self.window_size[0],
+				self.window_size[1] - self.gui.panelBY - self.gui.panelY)
+		else:
+			gate = Rect(*gate)
+
+		# Slack left below the last line when scrolling to the end. It was
+		# gui.panelBY in both branches, which is the same thing whenever the gate
+		# ends where the bottom panel starts - the case for every caller that
+		# does not pass a gate.
+		bottom_slack = max(0, self.window_size[1] - gate.bottom)
+
 		line_active = -1
 		last = -1
 
@@ -21953,7 +21986,7 @@ class TimedLyricsRen:
 			bg = self.colours.lyrics_panel_background
 			font_size = 15
 			spacing = round(6 * self.gui.scale)
-			self.ddt.rect((self.gui.rsp_x, y, self.gui.rspw, h), bg)
+			self.ddt.rect(frame, bg)
 			y += 25 * self.gui.scale
 			y_center = y + (h/2) - (spacing)
 			allowed_width = round(w - 20 * self.gui.scale)
@@ -22015,10 +22048,10 @@ class TimedLyricsRen:
 
 		if side_panel:
 			top_position =     sum( self.line_heights[ :max(0,line_active) ]) - h/2
-			bottom_position = -sum( self.line_heights[ max(0,line_active): ]) + h/2 - self.gui.panelBY
+			bottom_position = -sum( self.line_heights[ max(0,line_active): ]) + h/2 - bottom_slack
 		else:
 			top_position =     sum( self.line_heights[ :max(0,line_active) ]) - self.window_size[1]/2 + y/2
-			bottom_position = -sum( self.line_heights[ max(0,line_active): ]) + self.window_size[1]/2 - self.gui.panelBY
+			bottom_position = -sum( self.line_heights[ max(0,line_active): ]) + self.window_size[1]/2 - bottom_slack
 
 		if self.scroll_position < bottom_position:
 			self.scroll_position = int(bottom_position)
@@ -22059,7 +22092,7 @@ class TimedLyricsRen:
 
 		# click a lyric to seek to it
 		if self.inp.mouse_click \
-			and self.gui.panelY < self.inp.mouse_position[1] < self.window_size[1] - self.gui.panelBY \
+			and gate.y < self.inp.mouse_position[1] < gate.bottom \
 			and (not h or y-25*self.gui.scale < self.inp.mouse_position[1] < y+h-25*self.gui.scale):
 			for rendered_line in line_positions:
 				if self.coll(rendered_line[0]):
@@ -39922,6 +39955,12 @@ class RightPanel:
 		# The 9px inset is the renderer's own left margin. The width is not
 		# reduced to match it, so the text run keeps the full panel width and
 		# overhangs by that much; left as it was.
+		#
+		# frame is the area the renderer paints its background over. It used to
+		# take that from gui.rsp_x/gui.rspw, so passing the rect is what makes
+		# this panel stop describing itself through globals (R2). No gate: the
+		# preset default is the content strip between the two panels, which is
+		# what this caller has always used.
 		tauon.timed_lyrics_ren.render(
 			track.index,
 			lyrics.x + 9 * self.gui.scale,
@@ -39929,6 +39968,7 @@ class RightPanel:
 			side_panel=True,
 			w=lyrics.w,
 			h=lyrics.h,
+			frame=lyrics,
 		)
 
 		if band is not None:

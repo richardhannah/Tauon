@@ -174,19 +174,33 @@ with large track text, static lyrics, synced lyrics, and either lyrics view with
 a metadata band above or below it — as methods that derive from the rect they are
 given.
 
-It is not yet position-independent, and both reasons are marked at the line where
-they occur rather than filed away:
+One thing still stops it being position-independent, and it is marked at the line
+where it occurs rather than filed away: the centred layout places its art at
+`round(h * 0.1)` measured from the top of the **window**, while the text below it
+adds the panel's `y` to the same number. Deriving both from the panel would drop
+the art by `panelY`, so it is left as it is; it is a behaviour decision, not a
+mechanical one.
 
-- The centred layout places its art at `round(h * 0.1)` measured from the top of
-  the **window**, while the text below it adds the panel's `y` to the same
-  number. Deriving both from the panel would drop the art by `panelY`, so it is
-  left as it is; it is a behaviour decision, not a mechanical one.
-- `TimedLyricsRen.render(side_panel=True)` reads `gui.rsp_x`, `gui.rspw`,
-  `gui.panelY` and `gui.panelBY` for itself. The preset panel is exactly where
-  those globals say it is, so it draws correctly — but `LyricsWidget` in
-  `t_custom.py` already has to save, overwrite and restore all four to point that
-  renderer at a custom-layout segment. Giving it a rect would delete that
-  save/restore and finish this panel's R2 conversion in one move.
+The other one is fixed. `TimedLyricsRen.render(side_panel=True)` used to read
+`gui.rsp_x`, `gui.rspw`, `gui.panelY` and `gui.panelBY` for itself, so any caller
+drawing somewhere other than the preset right panel had to publish itself through
+those four globals for the duration of the call and put them back afterwards —
+which is exactly what `LyricsWidget` did, in a `try`/`finally`. It takes two
+optional rects now:
+
+- `frame`, the area its side-panel background paints over (was
+  `gui.rsp_x`/`gui.rspw` plus the caller's `y`/`h`), and
+- `gate`, the area within which a click counts as a click on the lyrics (was
+  `gui.panelY` to `window_size[1] - gui.panelBY`).
+
+The scroll clamp's bottom slack was `gui.panelBY` in both branches; it is
+`window_size[1] - gate.bottom`, which is the same number whenever the gate ends
+where the bottom panel starts — the case for every caller that passes no gate.
+Omitting both arguments therefore reproduces the old expressions exactly, so the
+showcase caller is untouched, and `LyricsWidget` is now four lines with no
+save/restore. This is the shape the remaining conversions should take: a renderer
+that needs to know where it is gets told, rather than reading a global that
+happens to say so.
 
 One thing the extraction turned up: the static and synced lyrics views each had
 their own copy of the "split the panel into lyrics and a metadata band"
@@ -203,6 +217,14 @@ being the animated visualiser in the header bar. The band split was exercised
 separately by forcing the lyrics path on: the band lands 200 logical px flush to
 the panel's top or bottom edge as its preference says, and suppresses its top
 border in the top position.
+
+The synced lyrics path needs LRC data, which this machine's library does not
+have. Rather than write an `.lrc` into the music folder — which would leave
+`track.synced` populated in the library database even after deleting the file —
+`find_synced_lyric_data` was temporarily made to return a literal list, which
+touches neither disk nor track objects. Give the lines identical timestamps and
+the active-line highlight stops depending on how far playback got, so two runs
+are comparable. That is the trick worth remembering for any lyrics-view change.
 
 ### R3. Draw geometry and hit geometry share one source
 
