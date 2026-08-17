@@ -1057,9 +1057,6 @@ class GuiVar:
 
 		self.force_side_on_drag: bool = False
 		self.last_left_panel_mode = "playlist"
-		self.showing_l_panel: bool = False
-		self.l_panel_h: int = 0
-		self.l_panel_y: int = 0
 
 		self.downloading_bass: bool = False
 		self.d_click_ref = -1
@@ -6907,6 +6904,7 @@ class Tauon:
 		self.top_panel:                             TopPanel = TopPanel(tauon=self)
 		self.playlist_box:                       PlaylistBox = PlaylistBox(tauon=self)
 		self.side_panel:                           SidePanel = SidePanel(tauon=self)
+		self.right_panel:                         RightPanel = RightPanel(tauon=self)
 		self.radio_view:                           RadioView = RadioView(tauon=self)
 		self.view_box:                               ViewBox = ViewBox(tauon=self)
 		self.custom:                            CustomLayout = CustomLayout(tauon=self)
@@ -39790,6 +39788,300 @@ class SidePanel:
 			)
 
 
+class RightPanel:
+	"""The right side panel: album art, track metadata and lyrics.
+
+	Five layouts share one rectangle - art above metadata, centred art with
+	large track text, static lyrics, synced lyrics, and either lyrics view with
+	a metadata band above or below it. Inline in the render loop each of them
+	re-derived the panel for itself: 23 reads of window_size, 41 of
+	gui.panelY/gui.panelBY and 32 of gui.rsp_x/gui.rspw, all to describe one
+	rectangle (docs/layout-manager.md, R2). The panel takes that rectangle now
+	and every layout derives from it.
+
+	Unlike SidePanel it is not yet position-independent, and the two things
+	that stop it are marked where they occur rather than listed here: the
+	centred layout measures its art from the top of the window, and
+	TimedLyricsRen's side_panel mode reads gui.rsp_x/rspw/panelY/panelBY for
+	itself. Both are correct today because the preset panel is exactly where
+	those globals say it is, and neither can be changed without moving pixels.
+	"""
+
+	# Height of the metadata band shown beside the lyrics, in logical px.
+	# Published here because the split and the band both need it, and two
+	# copies of one size is how they fall out of agreement (R6). It was
+	# gui.l_panel_h - written by this panel every frame and read by nothing
+	# else, as were gui.l_panel_y and gui.showing_l_panel.
+	band_h = 200
+
+	# Narrower than this and the static lyrics view is not offered, because the
+	# lines wrap to nothing readable. The panel states what it does when it
+	# does not fit rather than degrading silently (R7).
+	lyrics_min_w = 192
+
+	def __init__(self, tauon: Tauon) -> None:
+		self.tauon   = tauon
+		self.inp     = tauon.inp
+		self.gui     = tauon.gui
+		self.ddt     = tauon.ddt
+		self.coll    = tauon.coll
+		self.pctl    = tauon.pctl
+		self.prefs   = tauon.prefs
+		self.colours = tauon.colours
+		# The one window read left, used by the centred layout's small_mode
+		# threshold. That test is about the window rather than the panel, so it
+		# is not simply panel.h; see draw_centred.
+		self.window_size = tauon.window_size
+
+		# Last frame's geometry, for code outside the draw that needs to ask
+		# where the panel is rather than re-derive it.
+		self.rect = Rect(0, 0, 0, 0)
+
+	def draw(self, x: int, y: int, w: int, h: int) -> None:
+		panel = Rect(x, y, w, h)
+		self.rect = panel
+
+		prefs = self.prefs
+		track = self.pctl.show_object()
+
+		if self.inp.middle_click and self.coll(panel):
+			self.cycle_layout(track)
+
+		if self.synced_lyrics_ready(track):
+			self.draw_synced_lyrics(panel, track)
+		elif (
+			prefs.show_lyrics_side
+			and track is not None
+			and track.lyrics
+			and panel.w > self.lyrics_min_w * self.gui.scale
+		):
+			self.draw_static_lyrics(panel, track)
+		elif prefs.side_panel_layout == 0:
+			self.draw_art_and_meta(panel, track)
+		elif prefs.side_panel_layout == 1:
+			self.draw_centred(panel, track)
+
+	def synced_lyrics_ready(self, track: TrackClass | None) -> bool:
+		"""Whether the synced (LRC) lyrics view is both wanted and available.
+
+		generate() parses and caches, so the order of the test matters: it must
+		stay behind the preference checks rather than being hoisted.
+		"""
+		return bool(
+			self.prefs.show_lyrics_side
+			and self.prefs.prefer_synced_lyrics
+			and track is not None
+			and self.tauon.timed_lyrics_ren.generate(track))
+
+	def cycle_layout(self, track: TrackClass | None) -> None:
+		"""Middle click cycles the panel between its layouts."""
+		prefs = self.prefs
+		timed = self.tauon.timed_lyrics_ren
+
+		if (track and track.lyrics and prefs.show_lyrics_side) or (
+			prefs.show_lyrics_side
+			and prefs.prefer_synced_lyrics
+			and track is not None
+			and timed.generate(track)
+		):
+			prefs.show_lyrics_side ^= True
+			prefs.side_panel_layout = 1
+		elif prefs.side_panel_layout == 0:
+			if (track and track.lyrics and not prefs.show_lyrics_side) or (
+				prefs.prefer_synced_lyrics
+				and track is not None
+				and timed.generate(track)
+			):
+				prefs.show_lyrics_side = True
+				prefs.side_panel_layout = 1
+			else:
+				prefs.side_panel_layout = 1
+		else:
+			prefs.side_panel_layout = 0
+
+	def lyric_split(self, panel: Rect) -> tuple[Rect, Rect | None, bool]:
+		"""Split the panel into the lyrics area and the metadata band.
+
+		Returns (lyrics, band, band_at_top); band is None when it is turned off
+		and the lyrics take the whole panel. Both lyrics views split the panel
+		the same way and had a copy each of the arithmetic - copies that had
+		already drifted, see draw_static_lyrics.
+		"""
+		if not self.prefs.show_side_lyrics_art_panel:
+			return panel, None, False
+
+		band_h = round(self.band_h * self.gui.scale)
+		if self.prefs.lyric_metadata_panel_top:
+			return panel.inset(top=band_h), panel.top_edge(band_h), True
+		return panel.inset(bottom=band_h), panel.bottom_edge(band_h), False
+
+	def draw_synced_lyrics(self, panel: Rect, track: TrackClass) -> None:
+		tauon = self.tauon
+		lyrics, band, _band_at_top = self.lyric_split(panel)
+
+		# The 9px inset is the renderer's own left margin. The width is not
+		# reduced to match it, so the text run keeps the full panel width and
+		# overhangs by that much; left as it was.
+		tauon.timed_lyrics_ren.render(
+			track.index,
+			lyrics.x + 9 * self.gui.scale,
+			lyrics.y,
+			side_panel=True,
+			w=lyrics.w,
+			h=lyrics.h,
+		)
+
+		if band is not None:
+			tauon.meta_box.l_panel(*band, track)
+			return
+
+		# Only the bandless layout opens the info menu here; with the band up
+		# the right click belongs to the band.
+		if self.inp.right_click and self.coll(panel):
+			tauon.center_info_menu.activate(track)
+
+	def draw_static_lyrics(self, panel: Rect, track: TrackClass) -> None:
+		meta_box = self.tauon.meta_box
+		lyrics, band, band_at_top = self.lyric_split(panel)
+
+		meta_box.lyrics(*lyrics, track)
+
+		if band is not None:
+			# A band at the top of the panel suppresses its own top border,
+			# because the panel's edge already draws that line. The synced view
+			# above does not do this - the two copies of this split drifted
+			# before they were merged here - so the difference is preserved
+			# rather than quietly resolved, since either way moves pixels.
+			meta_box.l_panel(*band, track, top_border=not band_at_top)
+
+	def draw_art_and_meta(self, panel: Rect, track: TrackClass | None) -> None:
+		"""side_panel_layout 0: square art at the top, metadata below it."""
+		meta_box = self.tauon.meta_box
+
+		if not self.prefs.show_side_art:
+			meta_box.draw(*panel, track=track)
+			return
+
+		# The art is square, so it wants the panel's full width - capped at the
+		# height available, which is what stops a wide panel in a short window
+		# from pushing the metadata off the bottom (R7).
+		art_h = min(panel.w, max(0, panel.h))
+		meta_box.draw(*panel.inset(top=art_h), track=track)
+		self.tauon.art_box.draw(*panel.top_edge(art_h), target_track=track)
+
+	def draw_centred(self, panel: Rect, track: TrackClass | None) -> None:
+		"""side_panel_layout 1: centred art over centred artist / title text."""
+		gui     = self.gui
+		ddt     = self.ddt
+		inp     = self.inp
+		pctl    = self.pctl
+		tauon   = self.tauon
+		prefs   = self.prefs
+		colours = self.colours
+
+		if not gui.have_art_bg:
+			ddt.clear_rect(panel)
+		ddt.rect(panel, colours.side_panel_background)
+		tauon.test_auto_lyrics(track)
+
+		if prefs.show_lyrics_side and track and track.lyrics:
+			# The lyrics are not actually drawn in this layout (the meta_box
+			# call has been commented out upstream for a long time); only the
+			# menu is live.
+			if inp.right_click and self.coll(panel) and track:
+				tauon.center_info_menu.activate(track)
+			return
+
+		x, y, w, h = panel
+
+		box_wide_w = round(w * 0.98)
+		boxx = round(min(h * 0.7, w * 0.9))
+		boxy = round(min(h * 0.7, w * 0.9))
+
+		bx = (x + w // 2) - (boxx // 2)
+		bx_wide = (x + w // 2) - (box_wide_w // 2)
+		# Measured from the top of the *window*, not the top of the panel: the
+		# art is placed at this absolute y while text_y below adds panel.y to
+		# the same number. That is the R2 residue in this layout. Deriving both
+		# from the panel would drop the art by panel.y (30 logical px at scale
+		# 1), so it is left alone until someone decides that is the look.
+		by = round(h * 0.1)
+
+		bby = by + boxy
+
+		# We want the text in the center, but slightly raised when area is large
+		text_y = (
+			y
+			+ by
+			+ boxy
+			+ ((h - bby) // 2)
+			- 44 * gui.scale
+			- round((h - bby - 94 * gui.scale) * 0.08)
+		)
+
+		small_mode = False
+		if self.window_size[1] < 550 * gui.scale:
+			small_mode = True
+			text_y = y + by + boxy + ((h - bby) // 2) - 38 * gui.scale
+
+		text_x = x + w // 2
+
+		if prefs.show_side_art:
+			gui.art_drawn_rect = None
+			default_border = (bx, by, boxx, boxy)
+			coll_border = default_border
+
+			tauon.art_box.draw(
+				bx_wide,
+				by,
+				box_wide_w,
+				boxy,
+				target_track=track,
+				tight_border=True,
+				default_border=default_border,
+				draw_background=False,
+			)
+
+			if gui.art_drawn_rect:
+				coll_border = gui.art_drawn_rect
+
+			if inp.right_click and self.coll(panel) and not self.coll(coll_border):
+				if tauon.is_level_zero(include_menus=False) and track:
+					tauon.center_info_menu.activate(track)
+
+		else:
+			text_y = y + round(h * 0.40)
+			if inp.right_click and self.coll(panel) and track:
+				tauon.center_info_menu.activate(track)
+
+		ww = w - 25 * gui.scale
+
+		gui.showed_title = True
+
+		if not track:
+			return
+
+		ddt.text_background_colour = colours.side_panel_background
+
+		if pctl.playing_state == PlayingState.URL_STREAM and not tauon.radiobox.dummy_track.title:
+			title = pctl.tag_meta
+		else:
+			title = track.title
+			if not title:
+				title = clean_string(track.filename)
+
+		line = " | ".join(filter(None, (track.album, track.date, track.genre)))
+
+		if small_mode:
+			ddt.text((text_x, text_y - 15 * gui.scale, 2), track.artist, colours.side_bar_line1, 315, max_w=ww)
+			ddt.text((text_x, text_y + 12 * gui.scale, 2), title, colours.side_bar_line1, 216, max_w=ww)
+			ddt.text((text_x, text_y + 35 * gui.scale, 2), line, colours.side_bar_line2, 313, max_w=ww)
+		else:
+			ddt.text((text_x, text_y - 15 * gui.scale, 2), track.artist, colours.side_bar_line1, 317, max_w=ww)
+			ddt.text((text_x, text_y + 17 * gui.scale, 2), title, colours.side_bar_line1, 218, max_w=ww)
+			ddt.text((text_x, text_y + 45 * gui.scale, 2), line, colours.side_bar_line2, 314, max_w=ww)
+
+
 class PlaylistBox:
 
 	def recalc(self) -> None:
@@ -58493,303 +58785,11 @@ def main(holder: Holder) -> None:
 					# visible, but its ArtBox path clears its target every frame, which
 					# breaks MilkDrop's persistent render buffer in a custom widget.
 					if gui.rsp and not prefs.album_mode and not gui.custom_mode:
-						gui.showing_l_panel = False
-						target_track = pctl.show_object()
-						rsp_x = gui.rsp_x
-
-						if inp.middle_click:
-							if tauon.coll(
-								(
-									rsp_x,
-									gui.panelY,
-									gui.rspw,
-									window_size[1] - gui.panelY - gui.panelBY,
-								)
-							):
-								if (target_track and target_track.lyrics and prefs.show_lyrics_side) or (
-									prefs.show_lyrics_side
-									and prefs.prefer_synced_lyrics
-									and target_track is not None
-									and tauon.timed_lyrics_ren.generate(target_track)
-								):
-									prefs.show_lyrics_side ^= True
-									prefs.side_panel_layout = 1
-								elif prefs.side_panel_layout == 0:
-									if (target_track and target_track.lyrics and not prefs.show_lyrics_side) or (
-										prefs.prefer_synced_lyrics
-										and target_track is not None
-										and tauon.timed_lyrics_ren.generate(target_track)
-									):
-										prefs.show_lyrics_side = True
-										prefs.side_panel_layout = 1
-									else:
-										prefs.side_panel_layout = 1
-								else:
-									prefs.side_panel_layout = 0
-
-						if (
-							prefs.show_lyrics_side
-							and prefs.prefer_synced_lyrics
-							and target_track is not None
-							and tauon.timed_lyrics_ren.generate(target_track)
-						):
-							if prefs.show_side_lyrics_art_panel:
-								gui.l_panel_h = round(200 * gui.scale)
-								gui.l_panel_y = window_size[1] - (gui.panelBY + gui.l_panel_h)
-								gui.showing_l_panel = True
-
-								if not prefs.lyric_metadata_panel_top:
-									tauon.timed_lyrics_ren.render(
-										target_track.index,
-										rsp_x + 9 * gui.scale,
-										gui.panelY,
-										side_panel=True,
-										w=gui.rspw,
-										h=window_size[1] - gui.panelY - gui.panelBY - gui.l_panel_h,
-									)
-									meta_box.l_panel(rsp_x, gui.l_panel_y, gui.rspw, gui.l_panel_h, target_track)
-								else:
-									tauon.timed_lyrics_ren.render(
-										target_track.index,
-										rsp_x + 9 * gui.scale,
-										gui.panelY + gui.l_panel_h,
-										side_panel=True,
-										w=gui.rspw,
-										h=window_size[1] - gui.panelY - gui.panelBY - gui.l_panel_h,
-									)
-									meta_box.l_panel(rsp_x, gui.panelY, gui.rspw, gui.l_panel_h, target_track)
-							else:
-								tauon.timed_lyrics_ren.render(
-									target_track.index,
-									rsp_x + 9 * gui.scale,
-									gui.panelY,
-									side_panel=True,
-									w=gui.rspw,
-									h=window_size[1] - gui.panelY - gui.panelBY,
-								)
-
-								if inp.right_click and tauon.coll(
-									(
-										rsp_x,
-										gui.panelY,
-										gui.rspw,
-										window_size[1] - (gui.panelBY + gui.panelY),
-									)
-								):
-									center_info_menu.activate(target_track)
-						elif (
-							prefs.show_lyrics_side
-							and target_track is not None
-							and target_track.lyrics
-							and gui.rspw > 192 * gui.scale
-						):
-							if prefs.show_side_lyrics_art_panel:
-								gui.l_panel_h = round(200 * gui.scale)
-								gui.l_panel_y = window_size[1] - (gui.panelBY + gui.l_panel_h)
-								gui.showing_l_panel = True
-
-								if not prefs.lyric_metadata_panel_top:
-									meta_box.lyrics(
-										rsp_x,
-										gui.panelY,
-										gui.rspw,
-										window_size[1] - gui.panelY - gui.panelBY - gui.l_panel_h,
-										target_track,
-									)
-									meta_box.l_panel(rsp_x, gui.l_panel_y, gui.rspw, gui.l_panel_h, target_track)
-								else:
-									meta_box.lyrics(
-										rsp_x,
-										gui.panelY + gui.l_panel_h,
-										gui.rspw,
-										window_size[1] - (gui.panelY + gui.panelBY + gui.l_panel_h),
-										target_track,
-									)
-
-									meta_box.l_panel(
-										rsp_x,
-										gui.panelY,
-										gui.rspw,
-										gui.l_panel_h,
-										target_track,
-										top_border=False,
-									)
-							else:
-								meta_box.lyrics(
-									rsp_x,
-									gui.panelY,
-									gui.rspw,
-									window_size[1] - gui.panelY - gui.panelBY,
-									target_track,
-								)
-
-						elif prefs.side_panel_layout == 0:
-							boxw = gui.rspw
-							available_h = max(0, window_size[1] - gui.panelY - gui.panelBY)
-							boxh = min(gui.rspw, available_h)
-
-							if prefs.show_side_art:
-								meta_box.draw(
-									rsp_x,
-									gui.panelY + boxh,
-									gui.rspw,
-									available_h - boxh,
-									track=target_track,
-								)
-
-								tauon.art_box.draw(rsp_x, gui.panelY, boxw, boxh, target_track=target_track)
-
-							else:
-								meta_box.draw(
-									rsp_x,
-									gui.panelY,
-									gui.rspw,
-									window_size[1] - gui.panelY - gui.panelBY,
-									track=target_track,
-								)
-
-						elif prefs.side_panel_layout == 1:
-							h = window_size[1] - (gui.panelY + gui.panelBY)
-							x = rsp_x
-							y = gui.panelY
-							w = gui.rspw
-
-							if not gui.have_art_bg:
-								ddt.clear_rect((x, y, w, h))
-							ddt.rect((x, y, w, h), colours.side_panel_background)
-							tauon.test_auto_lyrics(target_track)
-							# Draw lyrics if available
-							if (
-								prefs.show_lyrics_side and target_track and target_track.lyrics
-							):  # and not prefs.show_side_art:
-								# meta_box.lyrics(x, y, w, h, target_track)
-								if inp.right_click and tauon.coll((x, y, w, h)) and target_track:
-									center_info_menu.activate(target_track)
-							else:
-								box_wide_w = round(w * 0.98)
-								boxx = round(min(h * 0.7, w * 0.9))
-								boxy = round(min(h * 0.7, w * 0.9))
-
-								bx = (x + w // 2) - (boxx // 2)
-								bx_wide = (x + w // 2) - (box_wide_w // 2)
-								by = round(h * 0.1)
-
-								bby = by + boxy
-
-								# We want the text in the center, but slightly raised when area is large
-								text_y = (
-									y
-									+ by
-									+ boxy
-									+ ((h - bby) // 2)
-									- 44 * gui.scale
-									- round((h - bby - 94 * gui.scale) * 0.08)
-								)
-
-								small_mode = False
-								if window_size[1] < 550 * gui.scale:
-									small_mode = True
-									text_y = y + by + boxy + ((h - bby) // 2) - 38 * gui.scale
-
-								text_x = x + w // 2
-
-								if prefs.show_side_art:
-									gui.art_drawn_rect = None
-									default_border = (bx, by, boxx, boxy)
-									coll_border = default_border
-
-									tauon.art_box.draw(
-										bx_wide,
-										by,
-										box_wide_w,
-										boxy,
-										target_track=target_track,
-										tight_border=True,
-										default_border=default_border,
-										draw_background=False,
-									)
-
-									if gui.art_drawn_rect:
-										coll_border = gui.art_drawn_rect
-
-									if inp.right_click and tauon.coll((x, y, w, h)) and not tauon.coll(coll_border):
-										if tauon.is_level_zero(include_menus=False) and target_track:
-											center_info_menu.activate(target_track)
-
-								else:
-									text_y = y + round(h * 0.40)
-									if inp.right_click and tauon.coll((x, y, w, h)) and target_track:
-										center_info_menu.activate(target_track)
-
-								ww = w - 25 * gui.scale
-
-								gui.showed_title = True
-
-								if target_track:
-									ddt.text_background_colour = colours.side_panel_background
-
-									if pctl.playing_state == PlayingState.URL_STREAM and not radiobox.dummy_track.title:
-										title = pctl.tag_meta
-									else:
-										title = target_track.title
-										if not title:
-											title = clean_string(target_track.filename)
-
-									if small_mode:
-										ddt.text(
-											(text_x, text_y - 15 * gui.scale, 2),
-											target_track.artist,
-											colours.side_bar_line1,
-											315,
-											max_w=ww,
-										)
-
-										ddt.text(
-											(text_x, text_y + 12 * gui.scale, 2),
-											title,
-											colours.side_bar_line1,
-											216,
-											max_w=ww,
-										)
-
-										line = " | ".join(
-											filter(None, (target_track.album, target_track.date, target_track.genre))
-										)
-										ddt.text(
-											(text_x, text_y + 35 * gui.scale, 2),
-											line,
-											colours.side_bar_line2,
-											313,
-											max_w=ww,
-										)
-
-									else:
-										ddt.text(
-											(text_x, text_y - 15 * gui.scale, 2),
-											target_track.artist,
-											colours.side_bar_line1,
-											317,
-											max_w=ww,
-										)
-
-										ddt.text(
-											(text_x, text_y + 17 * gui.scale, 2),
-											title,
-											colours.side_bar_line1,
-											218,
-											max_w=ww,
-										)
-
-										line = " | ".join(
-											filter(None, (target_track.album, target_track.date, target_track.genre))
-										)
-										ddt.text(
-											(text_x, text_y + 45 * gui.scale, 2),
-											line,
-											colours.side_bar_line2,
-											314,
-											max_w=ww,
-										)
+						# The panel owns its own layout; this only says where it goes
+						# (docs/layout-manager.md, R2).
+						tauon.right_panel.draw(
+							gui.rsp_x, gui.panelY, gui.rspw,
+							window_size[1] - (gui.panelY + gui.panelBY))
 
 					# Separation Line Drawing
 					if gui.rsp and not gui.custom_mode:

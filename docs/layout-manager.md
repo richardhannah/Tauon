@@ -166,6 +166,44 @@ finding all twelve rather than changing one number. It is `SidePanel` now, takin
 `(x, y, w, h)` and splitting it into a header band and the list/queue stack; the
 render loop's remaining job is to say where the panel goes.
 
+The **right side panel** was the same variant at three times the size: ~300 lines
+inline, 23 reads of `window_size`, 41 of `gui.panelY`/`gui.panelBY` and 32 of
+`gui.rsp_x`/`gui.rspw`, all describing one rectangle. It is `RightPanel` now,
+with the five layouts that share that rectangle — art over metadata, centred art
+with large track text, static lyrics, synced lyrics, and either lyrics view with
+a metadata band above or below it — as methods that derive from the rect they are
+given.
+
+It is not yet position-independent, and both reasons are marked at the line where
+they occur rather than filed away:
+
+- The centred layout places its art at `round(h * 0.1)` measured from the top of
+  the **window**, while the text below it adds the panel's `y` to the same
+  number. Deriving both from the panel would drop the art by `panelY`, so it is
+  left as it is; it is a behaviour decision, not a mechanical one.
+- `TimedLyricsRen.render(side_panel=True)` reads `gui.rsp_x`, `gui.rspw`,
+  `gui.panelY` and `gui.panelBY` for itself. The preset panel is exactly where
+  those globals say it is, so it draws correctly — but `LyricsWidget` in
+  `t_custom.py` already has to save, overwrite and restore all four to point that
+  renderer at a custom-layout segment. Giving it a rect would delete that
+  save/restore and finish this panel's R2 conversion in one move.
+
+One thing the extraction turned up: the static and synced lyrics views each had
+their own copy of the "split the panel into lyrics and a metadata band"
+arithmetic, and the copies had drifted. A band placed at the *top* suppresses its
+own top border in the static view (correct — the panel's edge already draws that
+line) and does not in the synced view. Merging the copies into one `lyric_split`
+made the difference visible; it is preserved rather than silently resolved,
+because either answer moves pixels.
+
+Verified by capturing the panel before and after in both layouts reachable
+without lyric data — art over metadata, and the centred view — at 1300×900: the
+panel region is pixel-identical, the only differences anywhere in the window
+being the animated visualiser in the header bar. The band split was exercised
+separately by forcing the lyrics path on: the band lands 200 logical px flush to
+the panel's top or bottom edge as its preference says, and suppresses its top
+border in the top position.
+
 ### R3. Draw geometry and hit geometry share one source
 
 Hit rects must be derived from the same rect as the drawing, not written out a
@@ -228,6 +266,15 @@ registered with `fields.add`, then reassigned partway down the same block to mea
 the playlist list's height. It is gone: the panel's rect and the list's height
 are separate locals in `SidePanel`, and the header band publishes its own height
 once as `SidePanel.header_h`.
+
+A third kind turned up in the right panel: `gui.showing_l_panel`, `gui.l_panel_h`
+and `gui.l_panel_y` were written every frame by the side-lyrics layouts and read
+by nothing at all — `showing_l_panel` had no reader anywhere, and the other two
+were only ever read a few lines below their own assignment. Panel-local values
+promoted to `gui` are the same hazard as a duplicated constant, because anything
+may start reading them and then depends on which layout ran last. They are locals
+in `RightPanel` now, and the band's height is published once as
+`RightPanel.band_h`.
 
 Note what is *not* folded in. `gui.panelY` becomes `round(100 * scale)` in the
 art-header mode, which is a different layout mode rather than a second copy of
@@ -410,13 +457,16 @@ and rendering offscreen — the workaround R2 describes.
 
 Done so far: R6 (above), so the two panel heights have one source; the R2
 conversion of `BottomBarType1`, from 29 window reads to one; and the extraction
-of the left side panel into `SidePanel`, which had no class at all. The header
-bar is the same shape of work and has 11.
+of both side panels — `SidePanel` and `RightPanel` — neither of which had a class
+at all. The header bar is the same shape of work and has 11.
 
-`SidePanel` is not yet a `Widget` — custom mode composes the playlist list, queue
-and artist list as separate widgets and skips the standard panel entirely, so
-there is nothing for it to be a widget *of* today. It has the shape for it if
-that changes: a rect-taking `draw`, a `fixed_h` header band, and no window reads.
+Neither side panel is a `Widget`, for the same reason — custom mode composes
+their contents as separate widgets (the playlist list, queue and artist list on
+the left; `ArtBoxWidget`, `MetaCenterWidget`, `MetaCenteredWidget`,
+`LyricsWidget` and `ArtistInfoWidget` on the right) and skips the standard panel
+entirely, so there is nothing for either to be a widget *of* today. Both have the
+shape for it if that changes. What they buy now is on the preset path: one owner
+for the split, so moving where a panel divides is one edit rather than a search.
 
 The step after that is the payoff: `PlaybackPanelWidget.draw()` passing its own
 rect to `bar.update()`/`bar.render()` instead of relying on the engine narrowing
