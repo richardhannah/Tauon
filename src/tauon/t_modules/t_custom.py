@@ -610,7 +610,10 @@ class PlaybackPanelWidget(Widget):
 	lock_v = True
 	# Intrinsic height, in logical units, and the source of truth for it:
 	# gui.panelBY is derived from this rather than repeating the number (R6).
-	fixed_h = 51
+	# Sized so the ringed play button clears the panel's top edge and the seek
+	# bar below it; everything else in the bar is bottom-anchored, so the extra
+	# height lands as headroom above the button row, which is where it is needed.
+	fixed_h = 61
 	min_w = 120
 	min_h = 30
 	single_instance = True

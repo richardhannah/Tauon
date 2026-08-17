@@ -840,7 +840,6 @@ class GuiVar:
 		self.pl_st: list[list[str | int | bool]] = [
 			["Artist", 156, False], ["Title", 188, False], ["T", 40, True],
 			["Album", 153, False], ["Time", 53, True]]
-		self.pl_box_h: int = 0
 
 		# Leading inset before the first column in columns (set) mode. Kept as an
 		# independent variable (not an entry in pl_st) so the first grip can drag
@@ -6907,6 +6906,7 @@ class Tauon:
 		self.bottom_bar_ao1:               BottomBarType_ao1 = BottomBarType_ao1(tauon=self)
 		self.top_panel:                             TopPanel = TopPanel(tauon=self)
 		self.playlist_box:                       PlaylistBox = PlaylistBox(tauon=self)
+		self.side_panel:                           SidePanel = SidePanel(tauon=self)
 		self.radio_view:                           RadioView = RadioView(tauon=self)
 		self.view_box:                               ViewBox = ViewBox(tauon=self)
 		self.custom:                            CustomLayout = CustomLayout(tauon=self)
@@ -20786,27 +20786,24 @@ class Tauon:
 					if not self.makes_own_playlist(target):
 						self.gui.drop_playlist_target = self.new_playlist()
 					self.gui.new_playlist_cooldown = True
-		elif self.gui.lsp and self.gui.panelY < i_y < self.window_size[1] - self.gui.panelBY and self.gui.lsp_x < i_x < self.gui.lsp_x + self.gui.lspw and self.gui.mode == GuiMode.MAIN:
-			y = self.gui.panelY
-			y += 5 * self.gui.scale
-			y += self.playlist_box.tab_h + self.playlist_box.gap
-
-			for i, pl in enumerate(self.pctl.multi_playlist):
-				if i_y < y:
-					self.gui.drop_playlist_target = i
-					self.tab_pulse.pulse()
-					self.gui.request_frame()
-					self.gui.pl_pulse = True
-					logging.info("Direct drop")
-					break
-				y += self.playlist_box.tab_h + self.playlist_box.gap
+		elif self.gui.lsp and self.gui.mode == GuiMode.MAIN and coll_point((i_x, i_y), self.side_panel.rect):
+			# Both rects come from the panel that drew them rather than being
+			# measured out again here, so a drop lands on the playlist the
+			# pointer is actually over - including while the list is scrolled,
+			# and whatever the panel puts above it (R3).
+			hit = self.playlist_box.playlist_at(i_x, i_y)
+			if hit is not None:
+				self.gui.drop_playlist_target = hit
+				self.tab_pulse.pulse()
+				self.gui.request_frame()
+				self.gui.pl_pulse = True
+				logging.info("Direct drop")
+			elif self.gui.new_playlist_cooldown:
+				self.gui.drop_playlist_target = self.pctl.active_playlist_viewing
 			else:
-				if self.gui.new_playlist_cooldown:
-					self.gui.drop_playlist_target = self.pctl.active_playlist_viewing
-				else:
-					if not self.makes_own_playlist(target):
-						self.gui.drop_playlist_target = self.new_playlist()
-					self.gui.new_playlist_cooldown = True
+				if not self.makes_own_playlist(target):
+					self.gui.drop_playlist_target = self.new_playlist()
+				self.gui.new_playlist_cooldown = True
 		else:
 			self.gui.drop_playlist_target = self.pctl.active_playlist_viewing
 
@@ -26474,8 +26471,8 @@ class SearchOverlay:
 					and not self.tauon.trans_edit_box.active and not gui.timed_lyrics_editing_now:
 
 				# Divert to artist list if mouse over
-				if gui.lsp and prefs.left_panel_mode == "artist list" and gui.lsp_x + 2 < inp.mouse_position[0] < gui.lsp_x + gui.lspw \
-						and gui.panelY < inp.mouse_position[1] < self.window_size[1] - gui.panelBY:
+				if gui.lsp and prefs.left_panel_mode == "artist list" \
+						and coll_point(inp.mouse_position, self.tauon.side_panel.content):
 					self.tauon.artist_list_box.locate_artist_letter(inp.input_text)
 					return
 
@@ -33876,8 +33873,10 @@ class BottomBarType1:
 		self.seek_hit = False
 		self.volume_hit = False
 		self.volume_bar_being_dragged = False
-		# Raised from 35 to make room for the seek bar on its own row beneath the buttons
-		self.control_line_bottom = 44 * self.gui.scale
+		# Raised from 35 to make room for the seek bar on its own row beneath the
+		# buttons, then by one more so the play ring sits between the panel's top
+		# edge and the seek bar with clearance either side.
+		self.control_line_bottom = 45 * self.gui.scale
 		self.repeat_click_off = False
 		self.random_click_off = False
 
@@ -33894,11 +33893,13 @@ class BottomBarType1:
 		self.volume_bar_position = [0, 45 * self.gui.scale]
 
 		self.play_button        = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "play.png", True)
+		self.play_ring          = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_play_ring.png", True)
 		self.forward_button     = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "ff.png", True)
 		self.back_button        = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "bb.png", True)
+		# Shuffle and repeat have no separate "off" glyph - the same icon is drawn
+		# in a dim colour when the mode is off, which is how media players
+		# conventionally signal it and keeps the row's widths constant.
 		self.repeat_button      = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_repeat.png", True)
-		self.repeat_button_off  = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_repeat_off.png", True)
-		self.shuffle_button_off = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_shuffle_off.png", True)
 		self.shuffle_button     = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_shuffle.png", True)
 		self.repeat_button_a    = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_repeat_a.png", True)
 		self.shuffle_button_a   = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_shuffle_a.png", True)
@@ -33930,20 +33931,25 @@ class BottomBarType1:
 		scale = self.gui.scale
 
 		def make(with_modes: bool) -> ControlRow:
+			# The ring is the tallest control in the row, so it sets the height of
+			# the shared hit band - taken from the ring rather than restated, so
+			# resizing the artwork moves the targets with it (R3).
 			row = ControlRow(
 				spacing=36 * scale,
-				hit_y=self.rect.bottom - self.control_line_bottom - (7 * scale),
-				hit_h=27 * scale)
+				hit_y=self.icon_y(self.play_ring, self.rect.bottom - self.control_line_bottom),
+				hit_h=self.play_ring.h)
 			# Declaration order is display order. Shuffle and repeat bracket the
 			# transport, with play/pause centred between skip back and skip forward,
 			# as media players conventionally arrange them.
 			if with_modes:
 				row.add("shuffle", self.shuffle_button.w)
 			row.add("back", self.back_button.w)
-			# A single play/pause toggle. Both glyphs are 14 wide - the play icon
-			# asset, and the two 4-wide pause bars set 10 apart - so the slot does
-			# not change size when the state flips.
-			row.add("playpause", self.play_button.w)
+			# A single play/pause toggle, ringed to mark it as the primary control.
+			# The ring is the button, so it sets the slot width; the glyph inside
+			# is centred on it and keeps its own size. Both glyphs are 14 wide -
+			# the play icon asset, and the two 4-wide pause bars set 10 apart - so
+			# nothing shifts when the state flips.
+			row.add("playpause", self.play_ring.w)
 			row.add("forward", self.forward_button.w)
 			if with_modes:
 				row.add("repeat", self.repeat_button.w)
@@ -33961,6 +33967,16 @@ class BottomBarType1:
 			row = make(with_modes=False)
 			row.place(self.rect.x + 29 * scale)
 		return row, centred
+
+	def icon_y(self, icon: WhiteModImageAsset, y: float) -> float:
+		"""Vertical position that centres `icon` on the play/pause glyph.
+
+		The transport icons are drawn at whatever size their artwork happens to
+		be, so each needs its own offset to sit on one centre line. Taking that
+		from the play button means an icon redrawn at a new size stays aligned
+		instead of needing a fresh literal typed in beside it (R4).
+		"""
+		return y + round((self.play_button.h - icon.h) / 2)
 
 	def update(self, rect: Rect | None = None) -> None:
 		self.place(rect)
@@ -34549,7 +34565,6 @@ class BottomBarType1:
 				)
 
 				rpbc = md_off
-				off = True
 				if shuffle.click:
 					tauon.toggle_random()
 					if pctl.random_mode is False:
@@ -34559,7 +34574,6 @@ class BottomBarType1:
 
 				if pctl.random_mode:
 					rpbc = md_active
-					off = False
 				elif shuffle.hover:
 					if self.random_click_off is True:
 						rpbc = md_off
@@ -34574,12 +34588,8 @@ class BottomBarType1:
 				if tauon.shuffle_menu.active and not pctl.random_mode:
 					rpbc = md_over
 
-				if pctl.album_shuffle_mode:
-					self.shuffle_button_a.render(sx, y, rpbc)
-				elif off:
-					self.shuffle_button_off.render(sx, y, rpbc)
-				else:
-					self.shuffle_button.render(sx, y, rpbc)
+				icon = self.shuffle_button_a if pctl.album_shuffle_mode else self.shuffle_button
+				icon.render(sx, self.icon_y(icon, y), rpbc)
 
 			# PLAY / PAUSE---
 			# One button showing the action it will perform: pause while playing,
@@ -34600,11 +34610,19 @@ class BottomBarType1:
 			if play_pause.right_click:
 				pctl.show_current(highlight=True)
 
+			# The ring fills the slot; the glyph is centred inside it rather than
+			# drawn at the slot's left edge, so it stays the size it was (R4).
+			self.play_ring.render(px, self.icon_y(self.play_ring, y), pp_colour)
+			glyph_x = px + round((self.play_ring.w - self.play_button.w) / 2)
+
 			if showing_pause:
-				ddt.rect_a((px, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
-				ddt.rect_a((px + 10 * gui.scale, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
+				ddt.rect_a((glyph_x, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
+				ddt.rect_a((glyph_x + 10 * gui.scale, y), (4 * gui.scale, 13 * gui.scale), pp_colour)
 			else:
-				self.play_button.render(px, y, pp_colour)
+				# A right-pointing triangle carries its mass a sixth of its width
+				# left of the box centre, so centring it geometrically reads as
+				# off-centre inside a ring. Nudge it right by that sixth.
+				self.play_button.render(glyph_x + round(self.play_button.w / 6), y, pp_colour)
 
 			# FORWARD---
 			forward = tauon.control(transport.hit("forward", hit_pad))
@@ -34634,7 +34652,8 @@ class BottomBarType1:
 			else:
 				gui.tool_tip_lock_off_f = False
 
-			self.forward_button.render(transport.x("forward"), 1 + y, forward_colour)
+			self.forward_button.render(
+				transport.x("forward"), self.icon_y(self.forward_button, y), forward_colour)
 
 			# BACK---
 			back = tauon.control(transport.hit("back", hit_pad))
@@ -34662,7 +34681,8 @@ class BottomBarType1:
 			else:
 				gui.tool_tip_lock_off_b = False
 
-			self.back_button.render(transport.x("back"), 1 + y, back_colour)
+			self.back_button.render(
+				transport.x("back"), self.icon_y(self.back_button, y), back_colour)
 
 			# REPEAT---
 			if transport.has("repeat"):
@@ -34672,7 +34692,6 @@ class BottomBarType1:
 				repeat = tauon.control(transport.hit("repeat", hit_pad))
 
 				rpbc = md_off
-				off = True
 				if repeat.click:
 					tauon.toggle_repeat()
 					if pctl.repeat_mode is False:
@@ -34683,7 +34702,6 @@ class BottomBarType1:
 				repeat_tip = _("Repeat album") if pctl.album_repeat_mode else _("Repeat track")
 				if pctl.repeat_mode:
 					rpbc = md_active
-					off = False
 					if repeat.hover:
 						tauon.tool_tip.test(rx, y - 28 * gui.scale, repeat_tip)
 				elif repeat.hover:
@@ -34706,12 +34724,8 @@ class BottomBarType1:
 
 				rpbc = alpha_blend(rpbc, colours.bottom_panel_colour)  # bake in alpha in case of overlap
 
-				if pctl.album_repeat_mode:
-					self.repeat_button_a.render(rx, y, rpbc)
-				elif off:
-					self.repeat_button_off.render(rx, y, rpbc)
-				else:
-					self.repeat_button.render(rx, y, rpbc)
+				icon = self.repeat_button_a if pctl.album_repeat_mode else self.repeat_button
+				icon.render(rx, self.icon_y(icon, y), rpbc)
 
 			# menu button
 
@@ -35134,8 +35148,11 @@ class MiniMode:
 
 		self.left_slide  = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "left-slide.png", True)
 		self.right_slide = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "right-slide.png", True)
-		self.repeat      = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "repeat-mini-mode.png", True)
-		self.shuffle     = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "shuffle-mini-mode.png", True)
+		# The playback panel's artwork, not a second copy of it - the glyphs are
+		# square and small enough to suit both views, and sharing them means a
+		# redraw cannot leave mini mode showing a different icon (R6).
+		self.repeat      = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_repeat.png", True)
+		self.shuffle     = asset_loader(tauon.bag, tauon.bag.loaded_asset_dc, "tauon_shuffle.png", True)
 
 		self.shuffle_fade_timer = Timer(100)
 		self.repeat_fade_timer = Timer(100)
@@ -35297,52 +35314,43 @@ class MiniMode:
 				self.window_size[0] - self.right_slide.w - 16 * self.gui.scale, y1 + 17 * self.gui.scale,
 				ColourRGBA(255, 255, 255, hint))
 
-		# Shuffle
+		# Shuffle and repeat, flanking the seek bar at an equal distance from each
+		# end of it. Both the draw position and the hit rect are derived from the
+		# bar and the artwork's own size, so redrawing an icon at a different size
+		# moves its target with it instead of leaving the two to drift (R3).
+		gap   = 12 * self.gui.scale
+		pad_x = 11 * self.gui.scale
+		pad_y = 6 * self.gui.scale
 
-		shuffle_area = (seek_r[0] + seek_w, seek_r[1] - 10 * self.gui.scale, 50 * self.gui.scale, 30 * self.gui.scale)
-		# self.fields.add(shuffle_area)
-		# self.ddt.rect_r(shuffle_area, [255, 0, 0, 100], True)
+		shuffle_x = seek_r[0] + seek_w + gap
+		shuffle_y = seek_r[1] + round((seek_r[3] - self.shuffle.h) / 2)
+		shuffle_area = (
+			shuffle_x - pad_x, shuffle_y - pad_y,
+			self.shuffle.w + (pad_x * 2), self.shuffle.h + (pad_y * 2))
 
 		if self.coll(control_hit_area) and not self.prefs.shuffle_lock:
 			colour = ColourRGBA(255, 255, 255, 20)
 			if self.inp.mouse_click and self.coll(shuffle_area):
-				# self.pctl.random_mode ^= True
 				self.tauon.toggle_random()
 			if self.pctl.random_mode:
 				colour = ColourRGBA(255, 255, 255, 190)
 
-			sx = seek_r[0] + seek_w + 12 * self.gui.scale
-			sy = seek_r[1] - 2 * self.gui.scale
-			self.shuffle.render(sx, sy, colour)
+			self.shuffle.render(shuffle_x, shuffle_y, colour)
 
+		repeat_x = seek_r[0] - gap - self.repeat.w
+		repeat_y = seek_r[1] + round((seek_r[3] - self.repeat.h) / 2)
+		repeat_area = (
+			repeat_x - pad_x, repeat_y - pad_y,
+			self.repeat.w + (pad_x * 2), self.repeat.h + (pad_y * 2))
 
-			# sx = seek_r[0] + seek_w + 8 * self.gui.scale
-			# sy = seek_r[1] - 1 * self.gui.scale
-			# self.ddt.rect_a((sx, sy), (14 * self.gui.scale, 2 * self.gui.scale), colour)
-			# sy += 4 * self.gui.scale
-			# self.ddt.rect_a((sx, sy), (28 * self.gui.scale, 2 * self.gui.scale), colour)
-
-		shuffle_area = (seek_r[0] - 41 * self.gui.scale, seek_r[1] - 10 * self.gui.scale, 40 * self.gui.scale, 30 * self.gui.scale)
 		if self.coll(control_hit_area) and not self.prefs.shuffle_lock:
 			colour = ColourRGBA(255, 255, 255, 20)
-			if self.inp.mouse_click and self.coll(shuffle_area):
+			if self.inp.mouse_click and self.coll(repeat_area):
 				self.tauon.toggle_repeat()
 			if self.pctl.repeat_mode:
 				colour = ColourRGBA(255, 255, 255, 190)
 
-
-			sx = seek_r[0] - 36 * self.gui.scale
-			sy = seek_r[1] - 1 * self.gui.scale
-			self.repeat.render(sx, sy, colour)
-
-
-			# sx = seek_r[0] - 39 * self.gui.scale
-			# sy = seek_r[1] - 1 * self.gui.scale
-
-			#tw = 2 * self.gui.scale
-			# self.ddt.rect_a((sx + 15 * self.gui.scale, sy), (13 * self.gui.scale, tw), colour)
-			# self.ddt.rect_a((sx + 4 * self.gui.scale, sy + 4 * self.gui.scale), (25 * self.gui.scale, tw), colour)
-			# self.ddt.rect_a((sx + 30 * self.gui.scale - tw, sy), (tw, 6 * self.gui.scale), colour)
+			self.repeat.render(repeat_x, repeat_y, colour)
 
 
 		# Forward and back clicking
@@ -39576,6 +39584,212 @@ class RenamePlaylistBox:
 					self.pctl.multi_playlist[self.playlist_index].title = self.rename_text_area.text
 			self.inp.key_return_press = False
 
+class SidePanel:
+	"""The left side panel: a header band, then the list / queue stack below it.
+
+	This was ~75 lines inline in the render loop, deriving everything from
+	gui.panelY, gui.lspw and window_size - so "the top of the panel" was an
+	expression written out in a dozen places, and putting a band above the list
+	meant hunting all of them down (docs/layout-manager.md, R2). It takes a rect
+	now: the split happens once, and `content` publishes where the list actually
+	starts so code outside the draw can ask rather than re-derive it.
+
+	The header belongs to the panel rather than to the playlist list, so it is
+	drawn in every left-panel mode - the app identity and the menu do not come
+	and go with the list underneath them.
+	"""
+
+	# Height of the header band, in logical px. Published here because the split
+	# below and anything asking where the list starts both need it, and two
+	# copies of one size is how they fall out of agreement (R6).
+	header_h = 48
+
+	def __init__(self, tauon: Tauon) -> None:
+		self.tauon   = tauon
+		self.inp     = tauon.inp
+		self.gui     = tauon.gui
+		self.ddt     = tauon.ddt
+		self.coll    = tauon.coll
+		self.pctl    = tauon.pctl
+		self.prefs   = tauon.prefs
+		self.fields  = tauon.fields
+		self.colours = tauon.colours
+
+		bag = tauon.bag
+		# The app icon is full colour and renders as-is; the wordmark is a single
+		# colour glyph run, so it loads modded and takes the panel's text colour
+		# from the theme rather than carrying one of its own (R9).
+		self.app_icon = asset_loader(bag, bag.loaded_asset_dc, "app-icon.png")
+		self.wordmark = asset_loader(bag, bag.loaded_asset_dc, "title.png", True)
+
+		# Last frame's geometry: the whole panel, and the part below the header.
+		self.rect    = Rect(0, 0, 0, 0)
+		self.content = Rect(0, 0, 0, 0)
+
+	def draw(self, x: int, y: int, w: int, h: int) -> None:
+		gui   = self.gui
+		inp   = self.inp
+		tauon = self.tauon
+
+		panel = Rect(x, y, w, h)
+		self.rect = panel
+
+		header       = panel.top_edge(round(self.header_h * gui.scale))
+		content      = panel.inset(top=header.h)
+		self.content = content
+
+		self.fields.add(panel)
+
+		if gui.force_side_on_drag and not inp.quick_drag and not self.coll(panel):
+			gui.force_side_on_drag = False
+			tauon.update_layout_do()
+
+		if (
+			inp.quick_drag
+			and not coll_point(gui.drag_source_position_persist, panel)
+			and not point_proximity_test(gui.drag_source_position, inp.mouse_position, 10 * gui.scale)
+		):
+			gui.force_side_on_drag = True
+			if inp.mouse_up:
+				tauon.update_layout_do()
+
+		self.draw_header(header)
+
+		# The playlist list only knows its row rects while it is drawing them, so
+		# clear them before dispatch: a mode that does not draw the list must not
+		# leave last frame's rows answering drop tests (PlaylistBox.playlist_at).
+		tauon.playlist_box.forget_rows()
+
+		self.draw_content(content)
+
+	def draw_header(self, header: Rect) -> None:
+		"""The logo and the menu button.
+
+		Both are anchored to the header's own edges rather than placed from a
+		running cursor, so whatever gets added between them later cannot move
+		them (R10). Clipped to the band because the panel goes down to
+		gui.lspw_min, well below the width the contents want (R1).
+		"""
+		gui     = self.gui
+		ddt     = self.ddt
+		tauon   = self.tauon
+		colours = self.colours
+
+		pad = round(10 * gui.scale)
+		gap = round(8 * gui.scale)
+
+		# Kept clear of the panel's own edges. The right inset matters: the
+		# side-panel resize grab strip straddles the panel edge, so a control
+		# reaching it would take the same click as a drag.
+		inner = header.inset(left=pad, right=pad)
+
+		with ddt.clip(header):
+			ddt.rect(header, colours.side_panel_background)
+			ddt.text_background_colour = colours.side_panel_background
+
+			# MENU, anchored to the right edge. This is a second way into the same
+			# menu the header bar's MENU opens, not a replacement for it.
+			menu_word = _("MENU")
+			menu = inner.right_edge(ddt.get_text_w(menu_word, 212) + pad)
+			menu_button = tauon.control(menu)
+
+			colour = colours.tab_text_active if (tauon.x_menu.active or menu_button.hover) else colours.tab_text
+			ddt.text(
+				(menu.centre_x, menu.centre_y - ddt.get_text_w(menu_word, 212, height=True) / 2, 2),
+				menu_word, colour, 212)
+
+			if menu_button.click:
+				if tauon.x_menu.active:
+					tauon.x_menu.active = False
+				elif not tauon.x_menu.click_dismissed:
+					# click_dismissed: this same click already closed the menu's
+					# popup window - don't instantly reopen it. The menu takes
+					# itself into a popup window when it would overflow, so the
+					# anchor needs no clamping here.
+					tauon.x_menu.activate(position=(round(menu.x), round(header.bottom)))
+
+			# Logo, anchored to the left edge, in whatever room the menu leaves.
+			# What happens when it does not fit is stated rather than left to
+			# overlap (R7): the wordmark drops first, then the icon. The control
+			# outlives the decoration.
+			room = menu.x - gap - inner.x
+			if self.app_icon.w + gap + self.wordmark.w <= room:
+				self.app_icon.render(inner.x, inner.centre_y - self.app_icon.h / 2)
+				self.wordmark.render(
+					inner.x + self.app_icon.w + gap,
+					inner.centre_y - self.wordmark.h / 2,
+					colours.tab_text_active)
+			elif self.app_icon.w <= room:
+				self.app_icon.render(inner.x, inner.centre_y - self.app_icon.h / 2)
+
+	def draw_content(self, content: Rect) -> None:
+		"""The list / queue stack below the header."""
+		tauon   = self.tauon
+		gui     = self.gui
+		ddt     = self.ddt
+		pctl    = self.pctl
+		prefs   = self.prefs
+		inp     = self.inp
+		colours = self.colours
+
+		if prefs.left_panel_mode == "folder view" and not gui.force_side_on_drag:
+			tauon.tree_view_box.render(*content)
+			return
+
+		if prefs.left_panel_mode == "artist list" and not gui.force_side_on_drag:
+			tauon.artist_list_box.render(*content)
+			return
+
+		preview_queue = False
+		if (
+			inp.quick_drag
+			and self.coll(self.rect)
+			and not pctl.force_queue
+			and prefs.show_playlist_list
+			and prefs.hide_queue
+		):
+			preview_queue = True
+
+		# The list takes the whole content area unless the queue is showing, in
+		# which case it takes what its tabs need, capped at half.
+		list_h = content.h
+		if pctl.force_queue or preview_queue or not prefs.hide_queue:
+			wanted = (
+				(tauon.playlist_box.tab_h + tauon.playlist_box.gap) * gui.scale * len(pctl.multi_playlist)
+			) + 13 * gui.scale
+			list_h = min(wanted, round(content.h / 2))
+			if preview_queue:
+				list_h = round(content.h * 5 / 6)
+
+		if prefs.left_panel_mode == "queue":
+			list_h = 0
+
+		list_rect  = content.top_edge(list_h)
+		queue_rect = content.inset(top=list_h)
+
+		if list_h:
+			tauon.playlist_box.draw(*list_rect)
+
+		if pctl.force_queue or preview_queue or not prefs.show_playlist_list or not prefs.hide_queue:
+			tauon.queue_box.draw(*queue_rect)
+
+			if prefs.show_playlist_list and list_h:
+				# Separator line at the playlist list / queue seam
+				seam = queue_rect.top_edge(round(gui.scale * 2))
+				ddt.rect(seam, ColourRGBA(0, 0, 0, 255))
+				ddt.rect(seam, alpha_blend(ColourRGBA(255, 255, 255, 11), colours.queue_background))
+
+		elif prefs.left_panel_mode == "queue":
+			ddt.rect(queue_rect, colours.queue_background)
+			ddt.text_background_colour = colours.queue_background
+			ddt.text(
+				(queue_rect.centre_x, queue_rect.y + 15 * gui.scale, 2),
+				_("Queue is Empty"),
+				alpha_mod(colours.index_text, 200),
+				212,
+			)
+
+
 class PlaylistBox:
 
 	def recalc(self) -> None:
@@ -39602,6 +39816,11 @@ class PlaylistBox:
 		self.drag_source = 0
 		self.drag_on = -1
 
+		# This frame's visible rows, as (hit rect, playlist index). Published so
+		# that code which needs to know which playlist a point lands on asks the
+		# box that drew the rows instead of re-deriving them (R3).
+		self.row_hits: list[tuple[Rect, int]] = []
+
 		self.adds = []
 
 		self.indicate_w = round(2 * self.gui.scale)
@@ -39618,6 +39837,28 @@ class PlaylistBox:
 
 		self.text_offset = 2 * self.gui.scale
 		self.recalc()
+
+	def forget_rows(self) -> None:
+		"""Drop last frame's row rects.
+
+		Called by whoever is about to decide whether to draw this box, so that a
+		mode which does not draw it leaves nothing behind for playlist_at() to
+		answer with.
+		"""
+		self.row_hits.clear()
+
+	def playlist_at(self, x: float, y: float) -> int | None:
+		"""Index of the playlist whose row contains the point, or None.
+
+		The file-drop target test used to re-derive the rows by hand from
+		gui.panelY and tab_h, which meant it ignored scrolling and would shift
+		silently the moment anything was placed above the list (R3). It asks the
+		box that drew them instead, so the two cannot disagree.
+		"""
+		for rect, index in self.row_hits:
+			if coll_point((x, y), rect):
+				return index
+		return None
 
 	def draw(self, x: int, y: int, w: int, h: int) -> None:
 		tauon = self.tauon
@@ -39712,6 +39953,7 @@ class PlaylistBox:
 		# Process inputs
 		delete_pl = None
 		tab_on = 0
+		self.row_hits.clear()
 		# Render from a row boundary so neither the first nor the last visible tab is
 		# half-drawn. self.scroll_on itself stays fractional so that slow scroll input
 		# still accumulates and eventually steps the list by one whole row.
@@ -39732,6 +39974,9 @@ class PlaylistBox:
 			# be trimmed here as well or it answers clicks landing below the
 			# panel (R1 covers the pixels, not the input).
 			tab_hit_rect = tab.grow(top=round(1 * gui.scale)).clip_to(panel)
+
+			if tab_hit_rect is not None:
+				self.row_hits.append((tab_hit_rect, i))
 
 			if tab_hit_rect is not None and self.coll(tab_hit_rect):
 				if self.inp.right_click:
@@ -58571,81 +58816,11 @@ def main(holder: Holder) -> None:
 				# playlist list, artist list, folder navigator) as widgets; skip the
 				# standard left side panel to avoid double-rendering the same objects.
 				if gui.lsp and not gui.combo_mode and not gui.custom_mode:
-					# left side panel
-					h_estimate = (
-						(tauon.playlist_box.tab_h + tauon.playlist_box.gap) * gui.scale * len(pctl.multi_playlist)
-					) + 13 * gui.scale
-					panel_x = gui.lsp_x
-
-					full = window_size[1] - (gui.panelY + gui.panelBY)
-					half = round(full / 2)
-
-					gui.pl_box_h = full
-
-					panel_rect = (panel_x, gui.panelY, gui.lspw, gui.pl_box_h)
-					tauon.fields.add(panel_rect)
-
-					if gui.force_side_on_drag and not inp.quick_drag and not tauon.coll(panel_rect):
-						gui.force_side_on_drag = False
-						tauon.update_layout_do()
-
-					if (
-						inp.quick_drag
-						and not coll_point(gui.drag_source_position_persist, panel_rect)
-						and not point_proximity_test(gui.drag_source_position, inp.mouse_position, 10 * gui.scale)
-					):
-						gui.force_side_on_drag = True
-						if inp.mouse_up:
-							tauon.update_layout_do()
-
-					if prefs.left_panel_mode == "folder view" and not gui.force_side_on_drag:
-						tauon.tree_view_box.render(panel_x, gui.panelY, gui.lspw, gui.pl_box_h)
-					elif prefs.left_panel_mode == "artist list" and not gui.force_side_on_drag:
-						tauon.artist_list_box.render(*panel_rect)
-					else:
-						preview_queue = False
-						if (
-							inp.quick_drag
-							and tauon.coll(panel_rect)
-							and not pctl.force_queue
-							and prefs.show_playlist_list
-							and prefs.hide_queue
-						):
-							preview_queue = True
-
-						if pctl.force_queue or preview_queue or not prefs.hide_queue:
-							if h_estimate < half:
-								gui.pl_box_h = h_estimate
-							else:
-								gui.pl_box_h = half
-
-							if preview_queue:
-								gui.pl_box_h = round(full * 5 / 6)
-
-						if prefs.left_panel_mode != "queue":
-							tauon.playlist_box.draw(panel_x, gui.panelY, gui.lspw, gui.pl_box_h)
-						else:
-							gui.pl_box_h = 0
-
-						if pctl.force_queue or preview_queue or not prefs.show_playlist_list or not prefs.hide_queue:
-							tauon.queue_box.draw(panel_x, gui.panelY + gui.pl_box_h, gui.lspw, full - gui.pl_box_h)
-
-							if prefs.show_playlist_list and gui.pl_box_h:
-								# Separator line at the playlist list / queue seam
-								rect = (panel_x, gui.panelY + gui.pl_box_h, gui.lspw, round(gui.scale * 2))
-								ddt.rect(rect, ColourRGBA(0, 0, 0, 255))
-								ddt.rect(rect, alpha_blend(ColourRGBA(255, 255, 255, 11), colours.queue_background))
-						elif prefs.left_panel_mode == "queue":
-							text = _("Queue is Empty")
-							rect = (panel_x, gui.panelY + gui.pl_box_h, gui.lspw, full - gui.pl_box_h)
-							ddt.rect(rect, colours.queue_background)
-							ddt.text_background_colour = colours.queue_background
-							ddt.text(
-								(panel_x + (gui.lspw // 2), gui.panelY + gui.pl_box_h + 15 * gui.scale, 2),
-								text,
-								alpha_mod(colours.index_text, 200),
-								212,
-							)
+					# left side panel - the panel owns its own split, this only
+					# says where it goes (docs/layout-manager.md, R2)
+					tauon.side_panel.draw(
+						gui.lsp_x, gui.panelY, gui.lspw,
+						window_size[1] - (gui.panelY + gui.panelBY))
 
 				# ------------------------------------------------
 				# Scroll Bar

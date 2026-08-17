@@ -157,6 +157,15 @@ the bar computes the same rect it always did.
 `tab_width` as `w - tab_start` with `tab_start` absolute, which is only correct
 at `x == 0`. Taking a rect is not the same as being position-independent.
 
+The **left side panel** was a third variant: not a widget that read the window,
+but ~75 lines inline in the render loop with no owner at all. It computed its own
+vertical split from `gui.panelY`, `gui.lspw` and `window_size[1]`, so "the top of
+the panel" was an expression written out per call site — twelve of them, four
+outside the render block. Adding a band above the playlist list therefore meant
+finding all twelve rather than changing one number. It is `SidePanel` now, taking
+`(x, y, w, h)` and splitting it into a header band and the list/queue stack; the
+render loop's remaining job is to say where the panel goes.
+
 ### R3. Draw geometry and hit geometry share one source
 
 Hit rects must be derived from the same rect as the drawing, not written out a
@@ -173,6 +182,17 @@ Note that hit-testing (`coll`) and hover invalidation (`fields.add`) are two
 separate registrations that must otherwise be kept in sync by hand. This is what
 `Tauon.control()` is for (Phase 1): one rect, both registrations. Controls that
 have not been migrated to it still make them separately.
+
+The same failure appears wherever geometry is *re-measured* rather than derived,
+not only in controls. The file-drop target test re-derived the playlist list's
+rows by hand — `y = gui.panelY + 5 * scale`, then stepping by `tab_h + gap` — a
+hand-copy of the `Column` inside `PlaylistBox.draw`. It had already drifted: it
+ignored `scroll_on`, so dropping onto a scrolled list targeted the wrong
+playlist, and it would have shifted by the full height of anything placed above
+the list. `PlaylistBox` now records the rows it draws (`row_hits`, the same rects
+it passes to `coll()`) and answers `playlist_at(x, y)`; the drop test asks. A
+mode that does not draw the list calls `forget_rows()` first, so stale rows
+cannot answer.
 
 ### R4. Scale is applied by the layout layer
 
@@ -202,6 +222,13 @@ self.panelBY = round(PlaybackPanelWidget.fixed_h * self.scale)
 self.panelY = round(TopPanelWidget.fixed_h * self.scale)
 ```
 
+`gui.pl_box_h` was the other kind of duplication — not two copies of one fact but
+one name holding two. It was set to the panel's full height to build the rect
+registered with `fields.add`, then reassigned partway down the same block to mean
+the playlist list's height. It is gone: the panel's rect and the list's height
+are separate locals in `SidePanel`, and the header band publishes its own height
+once as `SidePanel.header_h`.
+
 Note what is *not* folded in. `gui.panelY` becomes `round(100 * scale)` in the
 art-header mode, which is a different layout mode rather than a second copy of
 the header's intrinsic height, and `gui.panelY2` is the tab-strip height that
@@ -217,6 +244,13 @@ The centred transport cluster collides with the mode buttons below roughly
 1030px, because the right-hand controls begin at `W - 380`. That is currently
 handled by a hand-written width threshold and a fallback to the old left-aligned
 position. A layout manager should express this as a constraint, not an `if`.
+
+The side panel header is a smaller instance done deliberately: the panel can be
+dragged down to `gui.lspw_min` (120 logical px), well under what an icon, a
+wordmark and a MENU button want, so the header states its order of sacrifice —
+the wordmark goes first, then the icon, and the control outlives the decoration.
+It is still an `if`, but the fallback is written next to the thing it degrades
+rather than inferred from a width constant somewhere else.
 
 ### R8. Persisted layouts must survive schema change
 
@@ -258,6 +292,13 @@ Two things that fall out of it, both worth checking when a control is re-anchore
   edge it had — leaving a dead band in the bar where right-click did nothing. It
   is now reset each frame from the strip's own start.
 
+The side panel header was built to this rule rather than repaired into it: MENU
+is anchored to the header's right edge and the logo to its left, so the things
+that arrive between them later cannot push either one. A second detail fell out
+of it — the side-panel resize grab strip straddles the panel edge, so a control
+reaching that edge would take the same click as a drag. The header keeps an inset
+clear of it.
+
 Not everything should be anchored. The status text and the download indicator
 genuinely follow the tabs, and the window-drag zone (`drag_zone_start_x`) has to
 begin after everything interactive, so those stay derived from the end of the
@@ -270,8 +311,9 @@ Ordered cheapest-first, each phase independently useful and shippable.
 **Phase 0 — clipping in `TDraw`. Done.** Push/pop clip stack over
 `SDL_SetRenderClipRect`, honoured by every draw path. Everything else depends on
 it (R1). Applied so far to `PlaylistBox`, which bounds its tabs to the panel and
-draws the overflow row again, and to `SpectrogramWidget`, which was setting the
-SDL clip rect by hand. The custom-layout engine could bound each widget to its
+draws the overflow row again, to `SpectrogramWidget`, which was setting the SDL
+clip rect by hand, and to the side panel's header band, whose logo would
+otherwise paint into the track list at narrow panel widths. The custom-layout engine could bound each widget to its
 segment, which would enforce R1 everywhere at once — but it would also clip menus
 opened from inside a widget, so it needs a "chrome escapes the clip" rule first.
 
@@ -306,7 +348,8 @@ Migrated so far: the five transport buttons in `BottomBarType1` — the cluster
 whose hit rects drifted, so the R3 case is now expressed in the API — the two
 `display_*_heart` hover rows, which exercise the `field_callback` path, and the
 header bar's MENU button, converted while it was being re-anchored (R10) so its
-`Rect` feeds the draw, the hover colour and the hit test alike. The remaining
+`Rect` feeds the draw, the hover colour and the hit test alike, and the side
+panel header's MENU button, written against it from the start. The remaining
 ~140 sites should be converted when they are being edited anyway, not in a
 sweep.
 
@@ -365,9 +408,15 @@ widgets through `RectPanelWidget` and are fully interactive in custom mode. What
 remained were the two window-reading panels, wrapped by narrowing `window_size`
 and rendering offscreen — the workaround R2 describes.
 
-Done so far: R6 (above), so the two panel heights have one source; and the R2
-conversion of `BottomBarType1`, from 29 window reads to one. The header bar is
-the same shape of work and has 11.
+Done so far: R6 (above), so the two panel heights have one source; the R2
+conversion of `BottomBarType1`, from 29 window reads to one; and the extraction
+of the left side panel into `SidePanel`, which had no class at all. The header
+bar is the same shape of work and has 11.
+
+`SidePanel` is not yet a `Widget` — custom mode composes the playlist list, queue
+and artist list as separate widgets and skips the standard panel entirely, so
+there is nothing for it to be a widget *of* today. It has the shape for it if
+that changes: a rect-taking `draw`, a `fixed_h` header band, and no window reads.
 
 The step after that is the payoff: `PlaybackPanelWidget.draw()` passing its own
 rect to `bar.update()`/`bar.render()` instead of relying on the engine narrowing
